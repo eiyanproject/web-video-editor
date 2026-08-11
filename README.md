@@ -25,13 +25,13 @@ The timeline also draws **keyframe tick marks**, and each cut point is labelled 
 
 ## Status
 
-**Phase 0 complete.** Library browsing over SMB shares and local folders, byte-range
-playback with native seeking, settings with credential storage, log viewer.
+**Phase 1 complete.** Library browsing over SMB shares, byte-range playback, media
+analysis with a disk cache, keyframe index, and a hover-scrub timeline with thumbnails.
 
 | Phase | State |
 |---|---|
 | 0 · scaffolding, library browser, range playback, SMB settings, logs | ✅ done |
-| 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | next |
+| 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ done |
 | 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | |
 | 3 · export engine (keyframe-snap), remux incl. MPEG-TS → MP4 | |
 | 4 · smart-cut (frame-exact) | algorithm validated in [`spike/`](spike/) |
@@ -169,6 +169,14 @@ POST /api/smb/mount|unmount|mount-all|test
 POST /api/check-path             validate an export destination
 GET  /api/logs                   in-memory ring buffer
 POST /api/logs/clear
+
+GET  /api/probe?path=&refresh=   codec/format facts + integrity verdict (cached)
+GET  /api/keyframes?path=        keyframe timestamps + gap statistics (cached)
+GET  /api/sprites?path=          thumbnail sheet index; starts a build if absent
+GET  /api/sprites/sheet?path=&n= one sprite sheet
+POST /api/deep-check             decode the first and last 20s for corruption
+GET  /api/cache                  analysis cache size
+POST /api/cache/clear
 ```
 
 ## Licence

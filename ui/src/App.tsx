@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Settings from './Settings'
 import Logs from './Logs'
+import Scrubber, { type SpriteIndex } from './Scrubber'
+import MediaInfo, { type Probe } from './MediaInfo'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -99,7 +101,80 @@ export default function App() {
   const [roots, setRoots] = useState<{ name: string; path: string }[]>([])
   const videoRef = useRef<HTMLVideoElement>(null)
 
+  // Phase 1 analysis for the selected file.
+  const [probe, setProbe] = useState<Probe | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [keyframes, setKeyframes] = useState<number[]>([])
+  const [avgGap, setAvgGap] = useState(0)
+  const [sprites, setSprites] = useState<SpriteIndex | null>(null)
+  const [deep, setDeep] = useState<{ ok: boolean; errors: string[]; took_ms: number } | null>(null)
+  const [deepBusy, setDeepBusy] = useState(false)
+
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000) }
+
+  // Analysis runs when a file is selected, in stages so the UI fills in as each
+  // piece lands: probe is instant, keyframes take seconds, sprites take longer.
+  useEffect(() => {
+    setProbe(null); setKeyframes([]); setAvgGap(0); setSprites(null); setDeep(null)
+    if (!selected || selected.is_dir) return
+    let cancelled = false
+    const q = (u: string) => `${u}?path=${encodeURIComponent(selected.abs)}`
+
+    ;(async () => {
+      setAnalyzing(true)
+      try {
+        const p = await (await fetch(q('/api/probe'))).json()
+        if (cancelled) return
+        if (p.error) { setError(`Could not analyse this file: ${p.error}`); return }
+        setProbe(p)
+
+        const k = await (await fetch(q('/api/keyframes'))).json()
+        if (cancelled || k.error) return
+        setKeyframes(k.times ?? []); setAvgGap(k.avg_gap ?? 0)
+
+        // Sprite generation is a background job; poll until it reports done.
+        let s: SpriteIndex = await (await fetch(q('/api/sprites'))).json()
+        if (cancelled) return
+        setSprites(s)
+        while (!cancelled && s && !s.done) {
+          await new Promise((r) => setTimeout(r, 2500))
+          if (cancelled) return
+          s = await (await fetch(q('/api/sprites'))).json()
+          setSprites(s)
+        }
+      } catch { /* surfaced by the error banner if it matters */ }
+      finally { if (!cancelled) setAnalyzing(false) }
+    })()
+
+    return () => { cancelled = true }
+  }, [selected?.abs])
+
+  const rebuildThumbs = async () => {
+    if (!selected) return
+    setSprites(null)
+    say('Rebuilding thumbnails…')
+    let s: SpriteIndex = await (await fetch(
+      `/api/sprites?refresh=true&path=${encodeURIComponent(selected.abs)}`)).json()
+    setSprites(s)
+    while (s && !s.done) {
+      await new Promise((r) => setTimeout(r, 2500))
+      s = await (await fetch(`/api/sprites?path=${encodeURIComponent(selected.abs)}`)).json()
+      setSprites(s)
+    }
+    say('Thumbnails rebuilt')
+  }
+
+  const runDeepCheck = async () => {
+    if (!selected) return
+    setDeepBusy(true)
+    try {
+      const r = await fetch('/api/deep-check', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: selected.abs }),
+      })
+      setDeep(await r.json())
+    } finally { setDeepBusy(false) }
+  }
 
   const openDir = async (p: string, all = showAll) => {
     setError(null); setLoading(true)
@@ -337,6 +412,18 @@ export default function App() {
             )}
           </div>
 
+          {/* Hover-scrub timeline with thumbnails and keyframe ticks. */}
+          {selected && duration > 0 && (
+            <Scrubber
+              path={selected.abs}
+              duration={duration}
+              current={curTime}
+              keyframes={keyframes}
+              sprites={sprites}
+              onSeek={(t) => { if (videoRef.current) { videoRef.current.currentTime = t; setCurTime(t) } }}
+            />
+          )}
+
           <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5">
             {/* Live playhead readout to millisecond precision. This is the number
                 Phase 2 will turn into cut points, so it is worth showing now. */}
@@ -344,6 +431,7 @@ export default function App() {
               {fmtTimecode(curTime)}
             </span>
             {duration > 0 && <span className="font-mono text-xs text-white/25">/ {fmtTimecode(duration)}</span>}
+            {analyzing && <span className="text-xs text-amber-300/70">analysing…</span>}
             <Btn title="Copy the current playback time as HH:MM:SS.mmm" disabled={!selected}
               onClick={() => copy(fmtTimecode(videoRef.current?.currentTime ?? 0), 'Timecode')}>
               ⏱ Copy time
@@ -356,9 +444,23 @@ export default function App() {
               {muted ? '🔇' : '🔊'}
             </Btn>
             <Btn title="Fullscreen" disabled={!selected} onClick={() => videoRef.current?.requestFullscreen()}>⛶</Btn>
+            <Btn title="Regenerate the hover thumbnails for this file" disabled={!selected} onClick={rebuildThumbs}>
+              ⟳ Thumbs
+            </Btn>
             <div className="flex-1" />
             <Btn title="Copy the selected file's path" disabled={!selected} onClick={() => copy(selected!.abs, 'Path')}>⧉ Path</Btn>
           </div>
+
+          {probe && (
+            <MediaInfo
+              probe={probe}
+              keyframeCount={keyframes.length}
+              avgGap={avgGap}
+              onDeepCheck={runDeepCheck}
+              deep={deep}
+              busy={deepBusy}
+            />
+          )}
 
           {playError && (
             <div className="border-l-2 border-red-400 bg-red-500/20 px-3 py-2 text-xs text-red-100">

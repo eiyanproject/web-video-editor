@@ -13,3 +13,4 @@ sample-media/
 *.json.bak
 smb-test.json
 ui/tsconfig.tsbuildinfo
+cache/

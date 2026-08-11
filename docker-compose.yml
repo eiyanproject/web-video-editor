@@ -14,10 +14,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./config:/config
+      - ./cache:/cache            # ffprobe results, keyframe index, sprite sheets
       # Uncomment to expose a LOCAL folder from the host as well:
       # - /srv/media:/media:ro
     environment:
       VEDITOR_CONFIG: "/config/settings.json"
+      VEDITOR_CACHE: "/cache"
       VEDITOR_BIND: "0.0.0.0:8080"
       RUST_LOG: "${RUST_LOG:-veditor_api=info,tower_http=warn}"
     # mount.cifs needs CAP_SYS_ADMIN. If mounting fails on an unusual host,

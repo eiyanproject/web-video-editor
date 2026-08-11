@@ -19,7 +19,8 @@ services:
     command: bash -c "cargo run"
     volumes:
       - ./api:/app
-      - ./config:/config          # settings.json + stored credentials (persistent)
+      - ./config:/config
+      - ./cache:/cache            # ffprobe results, keyframe index, sprite sheets
       - veditor-cargo:/usr/local/cargo/registry
       - veditor-target:/app/target
       # NO media or output bind mounts by default, and no seeded roots.
@@ -33,6 +34,7 @@ services:
       # - /c/Users/you/Videos:/media:ro
     environment:
       VEDITOR_CONFIG: "/config/settings.json"
+      VEDITOR_CACHE: "/cache"
       VEDITOR_BIND: "0.0.0.0:8080"
       RUST_LOG: "veditor_api=debug,tower_http=info"
       CARGO_BUILD_JOBS: "2"

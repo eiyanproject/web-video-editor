@@ -9,6 +9,8 @@
 //! path handling that remains exists to stop malformed input breaking things,
 //! not to police where you go.
 
+mod media;
+
 use std::{
     collections::VecDeque,
     net::SocketAddr,
@@ -239,6 +241,9 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub logs: LogBuffer,
     pub status: Arc<RwLock<std::collections::HashMap<String, ShareState>>>,
+    /// Files with a sprite build in flight, so a second request does not start
+    /// a duplicate ffmpeg over the same (often network-backed) file.
+    pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
 }
 
 fn now_secs() -> u64 {
@@ -299,7 +304,7 @@ impl IntoResponse for ApiError {
 /// Normalisation only: strip quotes, unify separators, drop a Windows drive
 /// prefix the container cannot mean anything by. With `allow_any_path` on, any
 /// absolute path that exists is accepted. Otherwise it must sit inside a root.
-async fn to_real_path(st: &AppState, root: &str, rel: &str) -> Result<PathBuf, ApiError> {
+pub async fn to_real_path(st: &AppState, root: &str, rel: &str) -> Result<PathBuf, ApiError> {
     let s = st.settings.read().await;
 
     let clean = rel.trim().trim_matches('"').replace('\\', "/");
@@ -1116,7 +1121,15 @@ async fn main() -> anyhow::Result<()> {
         config_path,
         logs,
         status: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
     };
+
+    let cache = media::cache_root();
+    if let Err(e) = std::fs::create_dir_all(&cache) {
+        tracing::warn!("cache directory {} is unusable: {e}", cache.display());
+    } else {
+        tracing::info!("analysis cache at {}", cache.display());
+    }
 
     // One attempt, in the background so a slow or absent NAS never delays
     // startup. If it fails the share is marked offline with the reason and left
@@ -1132,6 +1145,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/check-path", post(check_path))
         .route("/api/logs", get(get_logs))
         .route("/api/logs/clear", post(clear_logs))
+        // ---- Phase 1: media analysis ----
+        .route("/api/probe", get(media::get_probe))
+        .route("/api/keyframes", get(media::get_keyframes))
+        .route("/api/sprites", get(media::get_sprites))
+        .route("/api/sprites/sheet", get(media::get_sprite_sheet))
+        .route("/api/deep-check", post(media::deep_check))
+        .route("/api/cache", get(media::cache_info))
+        .route("/api/cache/clear", post(media::cache_clear))
         .route("/api/smb/mount", post(smb_mount))
         .route("/api/smb/mount-all", post(smb_mount_all))
         .route("/api/smb/unmount", post(smb_unmount))
