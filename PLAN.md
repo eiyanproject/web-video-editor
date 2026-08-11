@@ -371,6 +371,29 @@ on-a-mount, and the UI distinguishes four cases:
 Writability is tested by actually writing and deleting a probe file, not by inspecting
 permission bits, because permission bits lie on network filesystems.
 
+### 3.5b Nothing expensive happens by accident
+
+`-skip_frame nokey` avoids *decoding* most frames. It does not avoid *reading*:
+ffmpeg still demuxes the file end to end. Over a network share that means
+**building thumbnails pulls the entire file across the link**, on the same NIC
+that dominates export time.
+
+Measured on a 25-minute 480p file over SMB: probe 0.2s, keyframe index 7.9s,
+sprite build 11s. Scale that to a 2-hour 1080p film and the sprite build is a
+4 GB read - minutes, not seconds.
+
+So thumbnail generation is **never automatic**. Selecting a file must stay cheap.
+`GET /api/sprites?peek=true` reports what is already cached and will not start a
+build under any circumstance; only the explicit Thumbs button does.
+
+Without thumbnails the scrubber is still the primary tool: full-height keyframe
+ticks, minute markers, a large hover timecode, and the distance to the nearest
+keyframe. That last figure is the one that matters for cutting, and it costs
+nothing to display.
+
+The general rule: **an action that reads an entire file needs a button.** Anything
+that happens merely because the user clicked a filename must be metadata-cheap.
+
 ### 3.6 Connection state: report, never poll
 
 Shares are attempted **once** — at startup for anything marked auto-mount, and whenever

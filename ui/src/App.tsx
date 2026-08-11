@@ -132,16 +132,15 @@ export default function App() {
         if (cancelled || k.error) return
         setKeyframes(k.times ?? []); setAvgGap(k.avg_gap ?? 0)
 
-        // Sprite generation is a background job; poll until it reports done.
-        let s: SpriteIndex = await (await fetch(q('/api/sprites'))).json()
-        if (cancelled) return
-        setSprites(s)
-        while (!cancelled && s && !s.done) {
-          await new Promise((r) => setTimeout(r, 2500))
-          if (cancelled) return
-          s = await (await fetch(q('/api/sprites'))).json()
-          setSprites(s)
-        }
+        // Thumbnails are NOT generated automatically. `-skip_frame nokey` avoids
+        // decoding most frames but still demuxes the whole file, so building
+        // them pulls the entire file across the network - minutes for a 2-hour
+        // 1080p film, on the same link exports need. Press the button when you
+        // want them for a file you are actually going to edit.
+        //
+        // Existing sheets are picked up for free, though: this is cache-only.
+        const s: SpriteIndex = await (await fetch(q('/api/sprites') + '&peek=true')).json()
+        if (!cancelled && s && s.done && s.sheets > 0) setSprites(s)
       } catch { /* surfaced by the error banner if it matters */ }
       finally { if (!cancelled) setAnalyzing(false) }
     })()
@@ -444,8 +443,10 @@ export default function App() {
               {muted ? '🔇' : '🔊'}
             </Btn>
             <Btn title="Fullscreen" disabled={!selected} onClick={() => videoRef.current?.requestFullscreen()}>⛶</Btn>
-            <Btn title="Regenerate the hover thumbnails for this file" disabled={!selected} onClick={rebuildThumbs}>
-              ⟳ Thumbs
+            <Btn
+              title="Generate hover thumbnails for this file. Reads the entire file once, so it is slow over a network share — do it for files you are actually editing."
+              disabled={!selected} onClick={rebuildThumbs}>
+              {sprites?.done ? '⟳ Thumbs' : '🖼 Thumbs'}
             </Btn>
             <div className="flex-1" />
             <Btn title="Copy the selected file's path" disabled={!selected} onClick={() => copy(selected!.abs, 'Path')}>⧉ Path</Btn>

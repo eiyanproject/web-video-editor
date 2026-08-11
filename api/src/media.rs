@@ -317,6 +317,13 @@ pub struct PathQuery {
     pub path: String,
     #[serde(default)]
     pub refresh: bool,
+    /// Cache-only: report what already exists and never start a build.
+    ///
+    /// Building sprites reads the whole file, which over a network share is the
+    /// single most expensive thing this app does. It must never happen as a side
+    /// effect of merely selecting a file.
+    #[serde(default)]
+    pub peek: bool,
 }
 
 pub async fn get_probe(
@@ -547,6 +554,11 @@ pub async fn get_sprites(
                 return Ok(Json(v));
             }
         }
+    }
+
+    if q.peek {
+        // Nothing cached and the caller only wanted to look.
+        return Ok(Json(SpriteIndex { done: false, ..Default::default() }));
     }
 
     // Not built (or a rebuild was asked for): start one and report "in progress"

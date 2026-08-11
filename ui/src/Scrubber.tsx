@@ -100,13 +100,22 @@ export default function Scrubber({
         onMouseMove={(e) => { setHoverT(timeAt(e.clientX)); setHoverX(e.clientX) }}
         onMouseLeave={() => setHoverT(null)}
         onClick={(e) => onSeek(timeAt(e.clientX))}
-        className="relative h-9 cursor-pointer rounded bg-white/10"
+        className="relative h-16 cursor-pointer rounded bg-white/10"
       >
-        {/* keyframe ticks: where a lossless cut may land */}
+        {/* keyframe ticks: where a lossless cut may land. Full height, because
+            without thumbnails this bar's job is showing cut geometry. */}
         {ticks.map((t, i) => (
-          <div key={i} className="absolute top-0 h-2 w-px bg-sky-400/50"
+          <div key={i} className="absolute inset-y-0 w-px bg-sky-400/30"
             style={{ left: `${(t / duration) * 100}%` }} />
         ))}
+
+        {/* minute markers for orientation */}
+        {duration > 0 && Array.from({ length: Math.min(60, Math.floor(duration / 60)) }, (_, i) => (i + 1) * 60)
+          .filter((t) => t < duration)
+          .map((t) => (
+            <div key={`m${t}`} className="absolute bottom-0 h-2 w-px bg-white/25"
+              style={{ left: `${(t / duration) * 100}%` }} />
+          ))}
 
         {/* played portion */}
         <div className="absolute inset-y-0 left-0 rounded-l bg-indigo-500/35" style={{ width: `${pct}%` }} />
@@ -130,8 +139,10 @@ export default function Scrubber({
             top: (trackRef.current?.getBoundingClientRect().top ?? 0) - 6,
           }}
         >
-          {tile ? (
+          {/* Thumbnails only appear if they were generated on purpose. */}
+          {tile && (
             <div
+              className="mb-1"
               style={{
                 width: tile.w, height: tile.h,
                 backgroundImage: `url(${tile.url})`,
@@ -139,15 +150,12 @@ export default function Scrubber({
                 backgroundSize: `${tile.sheetW}px ${tile.sheetH}px`,
               }}
             />
-          ) : (
-            <div className="flex items-center justify-center bg-white/5 text-[10px] text-white/40"
-              style={{ width: 160, height: 90 }}>
-              {sprites && !sprites.done ? 'building thumbnails…' : 'no thumbnail'}
-            </div>
           )}
-          <div className="mt-0.5 text-center font-mono text-[11px] text-white/80">{fmt(hoverT)}</div>
+          <div className={`text-center font-mono text-white/90 ${tile ? 'text-[11px]' : 'px-2 py-0.5 text-base'}`}>
+            {fmt(hoverT)}
+          </div>
           {nearestKf != null && (
-            <div className="text-center font-mono text-[10px] text-sky-300/80">
+            <div className="px-2 pb-0.5 text-center font-mono text-[10px] text-sky-300/80">
               keyframe {Math.abs(nearestKf - hoverT) < 0.05 ? 'here' : `${(nearestKf - hoverT >= 0 ? '+' : '')}${(nearestKf - hoverT).toFixed(2)}s`}
             </div>
           )}
@@ -163,9 +171,16 @@ export default function Scrubber({
           </span>
         )}
         {sprites && !sprites.done && !sprites.error && (
-          <span className="text-amber-300/70">thumbnails building… {sprites.sheets}/{Math.ceil(sprites.count / 100) || '?'} sheets</span>
+          <span className="text-amber-300/70">
+            building thumbnails… {sprites.sheets}/{Math.ceil(sprites.count / 100) || '?'} sheets
+          </span>
         )}
         {sprites?.error && <span className="text-red-300/80">thumbnails failed</span>}
+        {!sprites && (
+          <span className="text-white/25">
+            hover for time · thumbnails off (reads the whole file — use the Thumbs button)
+          </span>
+        )}
       </div>
     </div>
   )
