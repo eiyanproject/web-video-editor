@@ -210,6 +210,14 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **Library browser** over the allowlisted roots (network JBOD mount, local dirs).
   Grid or list, folder tree, filter box, sort by name/date/size. Poster thumbnails
   pulled from the sprite cache (first sprite tile) so it isn't a wall of text.
+- **One navigation row.** Home, up, refresh, add-to-library and copy-path sit in the
+  same bar as the breadcrumb, because they are the same concern: where you are and how
+  you move. Icon-only with tooltips, and the path scrolls horizontally rather than
+  wrapping, so the row is fixed-height however deep the folder tree goes. Chrome that
+  grows is chrome stolen from the player.
+- **The paste-a-path box is a drawer, hidden by default.** It is occasional-use — most
+  navigation is clicking — so it costs nothing until opened, focuses itself when it is,
+  and closes on Escape or after a successful jump.
 - **Breadcrumbs relative to the library folder.** A path under a configured folder is
   shown as `Library / nas / Films`, not `Library / mnt / smb / nas / Films` — the
   mount plumbing is an implementation detail nobody chose. Every segment is clickable.

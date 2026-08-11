@@ -95,6 +95,8 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [playError, setPlayError] = useState<string | null>(null)
   const [pasted, setPasted] = useState('')
+  const [showPaste, setShowPaste] = useState(false)
+  const pasteRef = useRef<HTMLInputElement>(null)
   const [muted, setMuted] = useState(false)
   const [curTime, setCurTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -173,6 +175,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Opening the path drawer should put the cursor in it - otherwise you reach
+  // for the mouse again immediately after clicking a button.
+  useEffect(() => {
+    if (showPaste) pasteRef.current?.focus()
+  }, [showPaste])
+
   const rebuildThumbs = async () => {
     if (!selected) return
     setSprites(null)
@@ -241,6 +249,7 @@ export default function App() {
       const r = await fetch(`/api/resolve?path=${encodeURIComponent(p)}`)
       const d = await r.json()
       if (!r.ok) throw new Error(d.error)
+      setShowPaste(false)
       if (d.is_dir) { await openDir(d.abs); setSelected(null) }
       else {
         if (d.parent) await openDir(d.parent)
@@ -386,42 +395,61 @@ export default function App() {
 
         {/* ---------------- right: library + player -------------------- */}
         <div className="flex w-1/2 flex-col">
-          <div className="flex flex-wrap items-center gap-1 border-b border-white/10 p-2 text-xs">
-            <Btn title="Show library folders" onClick={() => openDir('')}>⌂ Home</Btn>
-            <Btn title="Go to the parent folder" disabled={!parent} onClick={() => openDir(parent!)}>↑ Up</Btn>
-            <Btn title="Re-read this folder from disk" onClick={() => { openDir(cwd); say('Refreshed') }}>⟳ Refresh</Btn>
-            <Btn title="Add this folder to your library permanently" disabled={!cwd} onClick={addCwdToLibrary}>★ Add to library</Btn>
-            <Btn title="Copy this folder's path" disabled={!cwd} onClick={() => copy(cwd, 'Folder path')}>⧉ Copy</Btn>
+          {/* One navigation row: actions and location together, because they are
+              the same concern. The path scrolls horizontally rather than
+              wrapping, so the row never grows and steals height from the player. */}
+          <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+            <Btn title="Show library folders" onClick={() => openDir('')}>⌂</Btn>
+            <Btn title="Go to the parent folder" disabled={!parent} onClick={() => openDir(parent!)}>↑</Btn>
+            <Btn title="Re-read this folder from disk" onClick={() => { openDir(cwd); say('Refreshed') }}>⟳</Btn>
+            <Btn title="Add this folder to your library permanently" disabled={!cwd} onClick={addCwdToLibrary}>★</Btn>
+            <Btn title="Copy this folder's path" disabled={!cwd} onClick={() => copy(cwd, 'Folder path')}>⧉</Btn>
+
+            <div className="mx-1 h-4 w-px shrink-0 bg-white/15" />
+
+            <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap
+                            [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <button onClick={() => openDir('')}
+                className="shrink-0 rounded px-1 text-white/50 hover:bg-white/10 hover:text-white">
+                Library
+              </button>
+              {crumbs.map((c) => (
+                <span key={c.path} className="flex shrink-0 items-center gap-0.5">
+                  <span className="text-white/20">/</span>
+                  <button onClick={() => openDir(c.path)}
+                    className="max-w-[16rem] truncate rounded px-1 text-white/60 hover:bg-white/10 hover:text-white">
+                    {c.name}
+                  </button>
+                </span>
+              ))}
+              {loading && <span className="ml-2 shrink-0 text-white/30">loading…</span>}
+            </div>
+
+            <Btn title="Open a path directly (paste from Explorer, a UNC share, or any absolute path)"
+              active={showPaste}
+              onClick={() => setShowPaste(!showPaste)}>
+              {showPaste ? '▴' : '▾'} Path
+            </Btn>
           </div>
 
-          {/* breadcrumbs */}
-          <div className="flex flex-wrap items-center gap-0.5 border-b border-white/10 px-3 py-1.5 text-xs">
-            <button onClick={() => openDir('')} className="rounded px-1 text-white/50 hover:bg-white/10 hover:text-white">
-              Library
-            </button>
-            {crumbs.map((c) => (
-              <span key={c.path} className="flex items-center gap-0.5">
-                <span className="text-white/20">/</span>
-                <button onClick={() => openDir(c.path)}
-                  className="max-w-[14rem] truncate rounded px-1 text-white/60 hover:bg-white/10 hover:text-white">
-                  {c.name}
-                </button>
-              </span>
-            ))}
-            {loading && <span className="ml-2 text-white/30">loading…</span>}
-          </div>
-
-          <div className="flex gap-2 border-b border-white/10 p-2">
-            <input
-              value={pasted}
-              onChange={(e) => setPasted(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && goToPasted()}
-              placeholder="Paste any path…  \\NAS\media\clip.mp4  or  /mnt/smb/nas"
-              className="flex-1 rounded bg-white/10 px-2 py-1 text-sm outline-none placeholder:text-white/25"
-            />
-            <Btn title="Open the pasted path" tone="accent" onClick={goToPasted}>Go</Btn>
-            <Btn title="Clear the box" disabled={!pasted} onClick={() => setPasted('')}>✕</Btn>
-          </div>
+          {/* Hidden by default: this is occasional-use, and the player wants the room. */}
+          {showPaste && (
+            <div className="flex gap-2 border-b border-white/10 px-2 py-1.5">
+              <input
+                ref={pasteRef}
+                value={pasted}
+                onChange={(e) => setPasted(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') goToPasted()
+                  if (e.key === 'Escape') { setShowPaste(false); setPasted('') }
+                }}
+                placeholder="Paste any path…  \\NAS\media\clip.mp4  or  /mnt/smb/nas"
+                className="flex-1 rounded bg-white/10 px-2 py-1 text-sm outline-none placeholder:text-white/25"
+              />
+              <Btn title="Open the pasted path" tone="accent" onClick={goToPasted}>Go</Btn>
+              <Btn title="Close (Esc)" onClick={() => { setShowPaste(false); setPasted('') }}>✕</Btn>
+            </div>
+          )}
 
           <div className="aspect-video w-full bg-black">
             {srcUrl ? (
