@@ -158,8 +158,12 @@ export default function App() {
     return () => { cancelled = true }
   }, [loaded?.abs])
 
-  // Arrow keys jump 5 seconds. Ignored while typing, or the path box would eat
-  // every left/right press.
+  // Arrow keys jump 5 seconds.
+  //
+  // Registered in the CAPTURE phase and stopping propagation, because the
+  // browser's own <video controls> handles arrows itself the moment the player
+  // has focus - and its step is not 5s. Listening on the bubble phase means the
+  // native handler has already run and won.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
@@ -167,12 +171,36 @@ export default function App() {
       const v = videoRef.current
       if (!v || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
       e.preventDefault()
+      e.stopPropagation()
       const t = Math.max(0, Math.min(v.duration || 0, v.currentTime + (e.key === 'ArrowRight' ? 5 : -5)))
       v.currentTime = t
       setCurTime(t)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // The mouse back button navigates UP A FOLDER rather than leaving the app.
+  //
+  // This is a single-page editor with no meaningful URL history, so browser
+  // back has nothing useful to do - and losing your session mid-edit because a
+  // thumb button was nudged would be miserable. A sentinel history entry is
+  // pushed and immediately re-pushed on every popstate, so back is absorbed
+  // whatever triggered it: mouse thumb button, Alt+Left, or the browser chrome.
+  const parentRef = useRef<string | null>(null)
+  useEffect(() => { parentRef.current = parent }, [parent])
+  const showAllRef = useRef(showAll)
+  useEffect(() => { showAllRef.current = showAll }, [showAll])
+
+  useEffect(() => {
+    history.pushState({ wve: true }, '', location.href)
+    const onPop = () => {
+      history.pushState({ wve: true }, '', location.href) // stay put
+      const p = parentRef.current
+      if (p) openDir(p, showAllRef.current)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   // Opening the path drawer should put the cursor in it - otherwise you reach
@@ -398,15 +426,9 @@ export default function App() {
           {/* One navigation row: actions and location together, because they are
               the same concern. The path scrolls horizontally rather than
               wrapping, so the row never grows and steals height from the player. */}
+          {/* Above the player: location only. The controls that act on the
+              folder live with the folder, further down. */}
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
-            <Btn title="Show library folders" onClick={() => openDir('')}>⌂</Btn>
-            <Btn title="Go to the parent folder" disabled={!parent} onClick={() => openDir(parent!)}>↑</Btn>
-            <Btn title="Re-read this folder from disk" onClick={() => { openDir(cwd); say('Refreshed') }}>⟳</Btn>
-            <Btn title="Add this folder to your library permanently" disabled={!cwd} onClick={addCwdToLibrary}>★</Btn>
-            <Btn title="Copy this folder's path" disabled={!cwd} onClick={() => copy(cwd, 'Folder path')}>⧉</Btn>
-
-            <div className="mx-1 h-4 w-px shrink-0 bg-white/15" />
-
             <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap
                             [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <button onClick={() => openDir('')}
@@ -538,28 +560,38 @@ export default function App() {
             </div>
           )}
 
-          {/* sort / filter bar */}
-          {!atHome && (
-            <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
-              <input value={filter} onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter this folder…"
-                className="w-40 rounded bg-white/10 px-2 py-1 outline-none placeholder:text-white/25" />
-              {filter && <Btn title="Clear the filter" onClick={() => setFilter('')}>✕</Btn>}
-              <span className="ml-1 text-white/25">sort</span>
-              {(['name', 'mtime', 'size'] as SortKey[]).map((k) => (
-                <Btn key={k} title={`Sort by ${k === 'mtime' ? 'date' : k}`} active={sortKey === k}
-                  onClick={() => (sortKey === k ? setSortAsc(!sortAsc) : (setSortKey(k), setSortAsc(k === 'name')))}>
-                  {k === 'mtime' ? 'date' : k}{sortKey === k ? (sortAsc ? ' ↑' : ' ↓') : ''}
+          {/* Folder explorer toolbar: navigation and view controls together,
+              directly above the listing they act on. */}
+          <div className="flex flex-wrap items-center gap-1 border-y border-white/10 bg-white/[0.02] px-2 py-1.5 text-xs">
+            <Btn title="Show library folders" onClick={() => openDir('')}>⌂</Btn>
+            <Btn title="Go to the parent folder (or your mouse back button)"
+              disabled={!parent} onClick={() => openDir(parent!)}>↑</Btn>
+            <Btn title="Re-read this folder from disk" onClick={() => { openDir(cwd); say('Refreshed') }}>⟳</Btn>
+            <Btn title="Add this folder to your library permanently" disabled={!cwd} onClick={addCwdToLibrary}>★</Btn>
+            <Btn title="Copy this folder's path" disabled={!cwd} onClick={() => copy(cwd, 'Folder path')}>⧉</Btn>
+
+            {!atHome && (
+              <>
+                <div className="mx-1 h-4 w-px shrink-0 bg-white/15" />
+                <input value={filter} onChange={(e) => setFilter(e.target.value)}
+                  placeholder="Filter…"
+                  className="w-32 rounded bg-white/10 px-2 py-1 outline-none placeholder:text-white/25" />
+                {filter && <Btn title="Clear the filter" onClick={() => setFilter('')}>✕</Btn>}
+                {(['name', 'mtime', 'size'] as SortKey[]).map((k) => (
+                  <Btn key={k} title={`Sort by ${k === 'mtime' ? 'date' : k}`} active={sortKey === k}
+                    onClick={() => (sortKey === k ? setSortAsc(!sortAsc) : (setSortKey(k), setSortAsc(k === 'name')))}>
+                    {k === 'mtime' ? 'date' : k}{sortKey === k ? (sortAsc ? ' ↑' : ' ↓') : ''}
+                  </Btn>
+                ))}
+                <div className="flex-1" />
+                <Btn title={showAll ? 'Show only video files' : 'Show every file, not just video'}
+                  active={showAll}
+                  onClick={() => { const v = !showAll; setShowAll(v); openDir(cwd, v) }}>
+                  {showAll ? 'all files' : 'video only'}
                 </Btn>
-              ))}
-              <div className="flex-1" />
-              <Btn title={showAll ? 'Show only video files' : 'Show every file, not just video'}
-                active={showAll}
-                onClick={() => { const v = !showAll; setShowAll(v); openDir(cwd, v) }}>
-                {showAll ? 'all files' : 'video only'}
-              </Btn>
-            </div>
-          )}
+              </>
+            )}
+          </div>
 
           <div className="min-h-0 flex-1 overflow-auto text-sm">
             {nothingConnected && !error && (

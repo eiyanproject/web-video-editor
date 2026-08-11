@@ -210,11 +210,16 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **Library browser** over the allowlisted roots (network JBOD mount, local dirs).
   Grid or list, folder tree, filter box, sort by name/date/size. Poster thumbnails
   pulled from the sprite cache (first sprite tile) so it isn't a wall of text.
-- **One navigation row.** Home, up, refresh, add-to-library and copy-path sit in the
-  same bar as the breadcrumb, because they are the same concern: where you are and how
-  you move. Icon-only with tooltips, and the path scrolls horizontally rather than
-  wrapping, so the row is fixed-height however deep the folder tree goes. Chrome that
-  grows is chrome stolen from the player.
+- **Location above the player, controls with the listing.** The breadcrumb sits in a
+  thin bar above the player; home / up / refresh / add-to-library / copy-path live in
+  the explorer toolbar directly above the file list, alongside filter and sort. Controls
+  belong next to the thing they act on. The breadcrumb scrolls horizontally rather than
+  wrapping, so its row is fixed-height however deep the tree goes — chrome that grows is
+  chrome stolen from the player.
+- **The mouse back button goes up a folder.** A single-page editor has no meaningful URL
+  history, and losing a session mid-edit because a thumb button was nudged would be
+  miserable. A sentinel history entry is pushed and re-pushed on every `popstate`, which
+  absorbs back from any source: mouse thumb button, Alt+Left, or browser chrome.
 - **The paste-a-path box is a drawer, hidden by default.** It is occasional-use — most
   navigation is clicking — so it costs nothing until opened, focuses itself when it is,
   and closes on Escape or after a successful jump.
@@ -298,6 +303,11 @@ Concretely, whenever a phase adds an endpoint or a capability, it also adds:
 - a **visible state indicator** if the thing can be on/off, mounted/unmounted,
   running/failed — a dot, badge or label, never silence;
 - a **result message** on success and on failure, in the UI, not just the log.
+
+Key handling that competes with a native control must be registered in the **capture**
+phase and stop propagation. `<video controls>` handles arrow keys itself the moment the
+player has focus, so a bubble-phase listener silently loses and the user gets the
+browser's step, not yours.
 
 Keyboard shortcuts are an *accelerator for* a button, never a replacement. Drag
 and drop is likewise an alternative path — anything draggable must also have a
@@ -467,6 +477,7 @@ HTML5 `currentTime` seeking is not reliably frame-exact on its own. Solution:
 ### 3.9 Keyboard
 
 `Space` play/pause · `J`/`K`/`L` shuttle · `←`/`→` jump 5s · `,`/`.` frame step ·
+mouse back button = up a folder ·
 `S` split at playhead · `Del` toggle segment deletion · `I`/`O` set in/out ·
 `+`/`-` timeline zoom · `Ctrl+Z`/`Ctrl+Shift+Z` undo/redo (the undo/redo arrows in the
 reference screenshot).
