@@ -236,8 +236,18 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **System folders are skipped**: `$RECYCLE.BIN`, `System Volume Information`,
   `#recycle` and `@eaDir` (Synology), `#snapshot`, `lost+found`, `.Trash*`. Every NAS
   carries these and they land at the top of the listing, exactly where a new user looks.
-- **Last folder is remembered** across reloads, falling back to the library list if it
-  has become unreachable — a share that is not mounted yet must not strand you.
+- **The session is remembered** across reloads: current folder, open clip, what the
+  editor holds, playback position, sort order and view toggles. Reopening the tab puts
+  you back exactly where you were, resumed to the second.
+  - The stored path is **verified before restoring**. A file that has moved, or a share
+    that is not mounted yet, must not leave a broken player and a dead path on screen —
+    the session is silently forgotten instead. Announcing "the file you had open is
+    missing" on every cold start before a NAS wakes up would be noise, not information.
+  - Position is throttled by a **coarse bucket of the playhead**, not a timer. A timer
+    closure reads stale state, and `timeupdate` never fires while paused; a bucket
+    derived from React state cannot go stale and still captures seeks on a paused clip.
+    Debouncing is wrong here — during continuous playback it never settles, so it would
+    never write at all.
 - **Paste-a-path box.** Clicking down a folder tree is tedious when you already know
   where the file is. The box accepts an absolute container path, a root-relative one,
   or a Windows path straight from Explorer's "Copy as path" — the backend recognises

@@ -76,6 +76,17 @@ const Btn = ({
 )
 
 const LAST_DIR = 'veditor.lastDir'
+const SESSION = 'veditor.session'
+
+type Session = {
+  selected?: Entry | null
+  loaded?: Entry | null
+  time?: number
+  muted?: boolean
+  sortKey?: SortKey
+  sortAsc?: boolean
+  showAll?: boolean
+}
 
 export default function App() {
   const [page, setPage] = useState<'edit' | 'settings' | 'logs'>('edit')
@@ -260,6 +271,64 @@ export default function App() {
       .catch(() => {})
 
   useEffect(() => { loadRoots() }, [])
+
+  // ---- session persistence -------------------------------------------------
+  // Restoring the open clip and its playback position across a reload. The file
+  // is verified to still exist first: a share that is not mounted yet, or a file
+  // that has moved, must not leave a broken player and a dead path on screen.
+  const pendingSeek = useRef<{ abs: string; t: number } | null>(null)
+
+  useEffect(() => {
+    let s: Session
+    try {
+      const raw = localStorage.getItem(SESSION)
+      if (!raw) return
+      s = JSON.parse(raw)
+    } catch { return }
+
+    if (s.muted != null) setMuted(s.muted)
+    if (s.sortKey) setSortKey(s.sortKey)
+    if (s.sortAsc != null) setSortAsc(s.sortAsc)
+    if (s.showAll != null) setShowAll(s.showAll)
+
+    const sel = s.selected
+    if (!sel?.abs) return
+    fetch(`/api/resolve?path=${encodeURIComponent(sel.abs)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error('gone')
+        pendingSeek.current = { abs: sel.abs, t: s.time ?? 0 }
+        setSelected(sel)
+        if (s.loaded?.abs) setLoaded(s.loaded)
+      })
+      .catch(() => {
+        // Silently forget it. Announcing "the file you had open is missing" on
+        // every cold start when a share is simply not up yet would be noise.
+        try { localStorage.removeItem(SESSION) } catch { /* ignore */ }
+      })
+  }, [])
+
+  // Latest values for the periodic writer, so playback position is saved
+  // without re-registering a timer four times a second.
+  const sessionRef = useRef<Session>({})
+  sessionRef.current = { selected, loaded, time: curTime, muted, sortKey, sortAsc, showAll }
+  const writeSession = () => {
+    try { localStorage.setItem(SESSION, JSON.stringify(sessionRef.current)) } catch { /* quota */ }
+  }
+
+  useEffect(() => {
+    window.addEventListener('beforeunload', writeSession)
+    return () => { window.removeEventListener('beforeunload', writeSession); writeSession() }
+  }, [])
+
+  // Throttled by a coarse bucket of the playhead rather than a timer: the write
+  // is driven by React state, so it can never read a stale closure, and a
+  // paused video (which emits no timeupdate) still persists correctly because
+  // seeking changes the bucket. Debouncing would be wrong here - during
+  // continuous playback it never settles, so it would never write at all.
+  const timeBucket = Math.floor(curTime / 3)
+  useEffect(() => {
+    writeSession()
+  }, [timeBucket, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
 
   useEffect(() => {
     const last = localStorage.getItem(LAST_DIR)
@@ -477,7 +546,21 @@ export default function App() {
             {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
-                onLoadedMetadata={() => { setPlayError(null); setDuration(videoRef.current?.duration ?? 0) }}
+                onLoadedMetadata={() => {
+                  setPlayError(null)
+                  const v = videoRef.current
+                  if (!v) return
+                  setDuration(v.duration ?? 0)
+                  // Resume where the last session left off. Only once per file,
+                  // and only if it is the file the position was recorded for.
+                  const ps = pendingSeek.current
+                  if (ps && selected && ps.abs === selected.abs && ps.t > 1 && ps.t < (v.duration || 0)) {
+                    v.currentTime = ps.t
+                    setCurTime(ps.t)
+                    say(`Resumed at ${fmtTimecode(ps.t).slice(0, 8)}`)
+                  }
+                  pendingSeek.current = null
+                }}
                 onTimeUpdate={() => setCurTime(videoRef.current?.currentTime ?? 0)}
                 onSeeked={() => setCurTime(videoRef.current?.currentTime ?? 0)}
                 onError={() => videoRef.current && setPlayError(describeMediaError(videoRef.current))} />
