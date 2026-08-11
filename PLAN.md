@@ -266,13 +266,24 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 
 ### 3.2 Left pane — editor
 
-- **Tab bar** — Audio · Adjustments · Effects · Subtitles · Watermark · Crop · **Trim**.
-  Only Trim is live; the others render disabled with a tooltip explaining they require
-  a full re-encode. Keeps the visual layout honest for later expansion.
+- **No tab bar.** The Movavi reference has Audio / Adjustments / Effects / Subtitles /
+  Watermark / Crop, and they were carried as disabled placeholders for a while. They are
+  gone: six permanently greyed buttons are not a roadmap, they are clutter that implies
+  features which are explicitly out of scope. If any of them is ever built, the tab can
+  come back with it.
 - **Live timecode readout** at `HH:MM:SS.mmm`, with **Copy time** and **Copy seconds**
   buttons. Millisecond precision because that is what a cut point needs, and copying is
   preferred over saving stills: anything written to the browser's download folder lands
   somewhere the app does not manage and the user did not choose (§3.5).
+- **The editor has its own video feed and its own playhead**, independent of the preview
+  player on the right. Finding a file and cutting one are separate activities and should
+  not fight over a single element. When the same clip is open in both, the right pane
+  steps aside rather than opening a second stream — pulling a multi-gigabyte file across
+  the network twice for one picture would be indefensible.
+- **Typed timecode.** A mouse cannot land on a chosen frame of a two-hour clip, and cut
+  points often come from notes. The box accepts `1:02:03.500`, `02:03.5` or plain
+  seconds, refuses anything else rather than silently seeking to zero, and offers
+  *Cut at time* and *Nearest keyframe* beside it.
 - **Preview surface** with the current frame, plus transport controls: jump-to-start,
   frame-back, play/pause, frame-forward, jump-to-end. Screenshot-to-PNG and mute
   buttons on the left, matching the reference.

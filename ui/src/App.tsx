@@ -5,7 +5,7 @@ import Scrubber, { type SpriteIndex } from './Scrubber'
 import MediaInfo, { type Probe } from './MediaInfo'
 import Timeline from './Timeline'
 import SegmentList from './SegmentList'
-import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary } from './segments'
+import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe } from './segments'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -34,6 +34,21 @@ const fmtSize = (n: number) => {
 
 const fmtDate = (ts: number) =>
   ts ? new Date(ts * 1000).toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' }) : ''
+
+/** Accepts `1:02:03.500`, `02:03.5`, or plain seconds. Returns null if it is
+ *  not a time at all, so a typo does not silently seek to zero. */
+function parseTimecode(s: string): number | null {
+  const str = s.trim()
+  if (!str) return null
+  if (/^\d+(\.\d+)?$/.test(str)) return parseFloat(str)
+  const m = str.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
+  if (!m) return null
+  const h = m[1] ? parseInt(m[1], 10) : 0
+  const min = parseInt(m[2], 10)
+  const sec = parseFloat(m[3])
+  if (min > 59 || sec >= 60) return null
+  return h * 3600 + min * 60 + sec
+}
 
 // HH:MM:SS.mmm — millisecond precision, which is what a cut point needs.
 const fmtTimecode = (t: number) => {
@@ -143,16 +158,29 @@ export default function App() {
   const [loadedProbe, setLoadedProbe] = useState<Probe | null>(null)
   const fps = loadedProbe?.fps || 25
   const editDuration = loaded ? (loadedProbe?.duration ?? 0) : 0
+
+  // The editor has its own video feed and its own playhead. Right pane is for
+  // finding things; left pane is where you work.
+  const editVideoRef = useRef<HTMLVideoElement>(null)
+  const [editTime, setEditTime] = useState(0)
+  const [tcInput, setTcInput] = useState('')
   const { segs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null)
   const dragBase = useRef<typeof segs | null>(null)
 
   const seek = (t: number) => {
-    const v = videoRef.current
-    if (!v) return
-    const clamped = Math.max(0, Math.min(v.duration || 0, t))
-    v.currentTime = clamped
-    setCurTime(clamped)
+    const v = editVideoRef.current
+    const clamped = Math.max(0, Math.min(editDuration || v?.duration || 0, t))
+    if (v) v.currentTime = clamped
+    setEditTime(clamped)
+  }
+
+  const goToTypedTime = () => {
+    const t = parseTimecode(tcInput)
+    if (t == null) { say('Not a time — try 1:02:03.500, 02:03.5 or 123.4'); return }
+    if (t > editDuration) { say(`Beyond the end (${fmtTimecode(editDuration).slice(0, 8)})`); return }
+    seek(t)
+    setTcInput('')
   }
 
   // Boundary drags emit continuously; only the final position becomes an undo
@@ -164,12 +192,12 @@ export default function App() {
   }
 
   const splitHere = () => {
-    apply((cur) => splitAt(cur, curTime))
-    say(`Cut at ${fmtTimecode(curTime).slice(0, 8)}`)
+    apply((cur) => splitAt(cur, editTime))
+    say(`Cut at ${fmtTimecode(editTime).slice(0, 8)}`)
   }
 
   const toggleSelected = () => {
-    const id = selectedSeg ?? segs.find((s) => curTime >= s.start && curTime < s.end)?.id
+    const id = selectedSeg ?? segs.find((s) => editTime >= s.start && editTime < s.end)?.id
     if (id != null) apply((cur) => toggleKeep(cur, id))
   }
 
@@ -238,8 +266,12 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
       if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return
-      const v = videoRef.current
+      // Keys drive the editor when a clip is loaded there, otherwise the
+      // preview player. You are working in the left pane; that is what should
+      // respond.
+      const v = editVideoRef.current ?? videoRef.current
       if (!v) return
+      const isEditor = !!editVideoRef.current
 
       // Frame stepping. The step is 1/fps of the loaded clip, so fractional
       // rates (23.976, 29.97) land on real frames instead of drifting.
@@ -247,7 +279,8 @@ export default function App() {
       const jump = (d: number) => {
         e.preventDefault(); e.stopPropagation()
         const t = Math.max(0, Math.min(v.duration || 0, v.currentTime + d))
-        v.currentTime = t; setCurTime(t)
+        v.currentTime = t
+        isEditor ? setEditTime(t) : setCurTime(t)
       }
 
       switch (e.key) {
@@ -525,12 +558,8 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {/* ---------------- left: editor ------------------------------- */}
         <div className="flex w-1/2 flex-col border-r border-white/10">
-          <div className="flex items-center gap-1 border-b border-white/10 p-2 text-xs">
-            {['Audio', 'Adjustments', 'Effects', 'Subtitles', 'Watermark', 'Crop'].map((t) => (
-              <button key={t} disabled title="Requires a full re-encode - not in the trim/join scope"
-                className="cursor-not-allowed rounded px-3 py-2 text-white/25">{t}</button>
-            ))}
-            <button className="rounded bg-indigo-500/80 px-3 py-2 font-medium">Trim</button>
+          <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+            <span className="px-1 font-medium text-white/70">Trim</span>
             <div className="flex-1" />
             <Btn title="Show the application log: mounts, saves, errors" onClick={() => setPage('logs')}>📋 Log</Btn>
             <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>
@@ -565,6 +594,22 @@ export default function App() {
                   {loaded.name}
                 </div>
 
+                {/* The editor's own feed. Independent playhead from the preview
+                    on the right, so finding a file and cutting one are separate
+                    activities that do not fight over the same player. */}
+                <div className="aspect-video w-full shrink-0 bg-black">
+                  <video
+                    ref={editVideoRef}
+                    key={loaded.abs}
+                    src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
+                    controls
+                    preload="metadata"
+                    className="h-full w-full"
+                    onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
+                    onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
+                  />
+                </div>
+
                 <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
                   <Btn title="Cut at the playhead (S)" tone="accent" onClick={splitHere}>✂ Cut here</Btn>
                   <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
@@ -573,13 +618,41 @@ export default function App() {
                   <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↷</Btn>
                   <Btn title="Remove every cut and start again" onClick={reset}>Reset</Btn>
                   <div className="flex-1" />
-                  <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(curTime)}</span>
-                  <span className="text-[10px] text-white/25">frame {Math.round(curTime * fps)}</span>
+                  <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(editTime)}</span>
+                  <span className="text-[10px] text-white/25">frame {Math.round(editTime * fps)}</span>
+                </div>
+
+                {/* Typed timecode: the mouse cannot land on a specific frame of a
+                    two-hour clip, and a cut point often comes from a note. */}
+                <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+                  <input
+                    value={tcInput}
+                    onChange={(e) => setTcInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') goToTypedTime() }}
+                    placeholder="Go to  1:02:03.500 · 02:03.5 · 123.4"
+                    className="w-56 rounded bg-white/10 px-2 py-1 font-mono outline-none placeholder:font-sans placeholder:text-white/25"
+                  />
+                  <Btn title="Jump to the typed time" onClick={goToTypedTime}>Go</Btn>
+                  <Btn title="Put the current playhead time in the box, to nudge and re-enter"
+                    onClick={() => setTcInput(fmtTimecode(editTime))}>⤴ Current</Btn>
+                  <Btn title="Jump to the typed time and cut there"
+                    onClick={() => {
+                      const t = parseTimecode(tcInput)
+                      if (t == null || t > editDuration) { say('Not a valid time for this clip'); return }
+                      seek(t); apply((cur) => splitAt(cur, t)); setTcInput('')
+                      say(`Cut at ${fmtTimecode(t).slice(0, 8)}`)
+                    }}>✂ Cut at time</Btn>
+                  <div className="flex-1" />
+                  <Btn title="Snap the playhead to the nearest keyframe — a cut here is free"
+                    disabled={!keyframes.length}
+                    onClick={() => { const t = snapToKeyframe(editTime, keyframes); seek(t); say(`Snapped to keyframe ${fmtTimecode(t).slice(0, 8)}`) }}>
+                    ⇥ Nearest keyframe
+                  </Btn>
                 </div>
 
                 <Timeline
                   duration={editDuration}
-                  current={curTime}
+                  current={editTime}
                   segs={segs}
                   keyframes={keyframes}
                   fps={fps}
@@ -591,10 +664,10 @@ export default function App() {
 
                 <div className="flex items-center gap-1 border-y border-white/10 px-2 py-1 text-[11px] text-white/40">
                   <span>step</span>
-                  <Btn title="Back one frame (,)" onClick={() => seek(curTime - 1 / fps)}>◀|</Btn>
-                  <Btn title="Forward one frame (.)" onClick={() => seek(curTime + 1 / fps)}>|▶</Btn>
-                  <Btn title="Back 5s (←)" onClick={() => seek(curTime - 5)}>−5s</Btn>
-                  <Btn title="Forward 5s (→)" onClick={() => seek(curTime + 5)}>+5s</Btn>
+                  <Btn title="Back one frame (,)" onClick={() => seek(editTime - 1 / fps)}>◀|</Btn>
+                  <Btn title="Forward one frame (.)" onClick={() => seek(editTime + 1 / fps)}>|▶</Btn>
+                  <Btn title="Back 5s (←)" onClick={() => seek(editTime - 5)}>−5s</Btn>
+                  <Btn title="Forward 5s (→)" onClick={() => seek(editTime + 5)}>+5s</Btn>
                   <div className="flex-1" />
                   <span className="text-white/20">S cut · Del keep/drop · , . frame · Space play</span>
                 </div>
@@ -678,7 +751,14 @@ export default function App() {
           )}
 
           <div className="aspect-video w-full bg-black">
-            {srcUrl ? (
+            {selected && loaded?.abs === selected.abs ? (
+              // Same clip is open in the editor. Streaming it twice would pull
+              // the file over the network twice for no benefit.
+              <div className="flex h-full flex-col items-center justify-center gap-1 text-xs text-white/35">
+                <div>Playing in the editor →</div>
+                <div className="text-white/20">left pane has the feed and the timeline</div>
+              </div>
+            ) : srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
                 onLoadedMetadata={() => {
