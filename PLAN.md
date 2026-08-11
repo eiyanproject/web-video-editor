@@ -391,6 +391,18 @@ ticks, minute markers, a large hover timecode, and the distance to the nearest
 keyframe. That last figure is the one that matters for cutting, and it costs
 nothing to display.
 
+The keyframe index has the same property - it demuxes end to end - so it is
+deferred to **Load into editor** rather than running on selection. The split is:
+
+| Action | Cost | What runs |
+|---|---|---|
+| Select a file (preview) | headers only | `ffprobe` metadata |
+| Load into editor | one full read | keyframe index |
+| Thumbs button | one full read | sprite sheets |
+
+Browsing a folder of fifty clips therefore costs fifty header reads, not fifty
+multi-gigabyte transfers.
+
 The general rule: **an action that reads an entire file needs a button.** Anything
 that happens merely because the user clicked a filename must be metadata-cheap.
 
@@ -446,7 +458,7 @@ HTML5 `currentTime` seeking is not reliably frame-exact on its own. Solution:
 
 ### 3.9 Keyboard
 
-`Space` play/pause · `J`/`K`/`L` shuttle · `←`/`→` frame step · `Shift+←/→` second step ·
+`Space` play/pause · `J`/`K`/`L` shuttle · `←`/`→` jump 5s · `,`/`.` frame step ·
 `S` split at playhead · `Del` toggle segment deletion · `I`/`O` set in/out ·
 `+`/`-` timeline zoom · `Ctrl+Z`/`Ctrl+Shift+Z` undo/redo (the undo/redo arrows in the
 reference screenshot).

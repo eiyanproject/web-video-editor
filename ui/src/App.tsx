@@ -109,44 +109,69 @@ export default function App() {
   const [sprites, setSprites] = useState<SpriteIndex | null>(null)
   const [deep, setDeep] = useState<{ ok: boolean; errors: string[]; took_ms: number } | null>(null)
   const [deepBusy, setDeepBusy] = useState(false)
+  const [indexing, setIndexing] = useState(false)
 
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000) }
 
-  // Analysis runs when a file is selected, in stages so the UI fills in as each
-  // piece lands: probe is instant, keyframes take seconds, sprites take longer.
+  // SELECTING a file is metadata-only. ffprobe reads headers, not the file, so
+  // browsing a folder of fifty clips costs nothing.
   useEffect(() => {
-    setProbe(null); setKeyframes([]); setAvgGap(0); setSprites(null); setDeep(null)
+    setProbe(null); setDeep(null)
     if (!selected || selected.is_dir) return
     let cancelled = false
-    const q = (u: string) => `${u}?path=${encodeURIComponent(selected.abs)}`
-
     ;(async () => {
       setAnalyzing(true)
       try {
-        const p = await (await fetch(q('/api/probe'))).json()
+        const p = await (await fetch(`/api/probe?path=${encodeURIComponent(selected.abs)}`)).json()
         if (cancelled) return
         if (p.error) { setError(`Could not analyse this file: ${p.error}`); return }
         setProbe(p)
-
-        const k = await (await fetch(q('/api/keyframes'))).json()
-        if (cancelled || k.error) return
-        setKeyframes(k.times ?? []); setAvgGap(k.avg_gap ?? 0)
-
-        // Thumbnails are NOT generated automatically. `-skip_frame nokey` avoids
-        // decoding most frames but still demuxes the whole file, so building
-        // them pulls the entire file across the network - minutes for a 2-hour
-        // 1080p film, on the same link exports need. Press the button when you
-        // want them for a file you are actually going to edit.
-        //
-        // Existing sheets are picked up for free, though: this is cache-only.
-        const s: SpriteIndex = await (await fetch(q('/api/sprites') + '&peek=true')).json()
-        if (!cancelled && s && s.done && s.sheets > 0) setSprites(s)
       } catch { /* surfaced by the error banner if it matters */ }
       finally { if (!cancelled) setAnalyzing(false) }
     })()
-
     return () => { cancelled = true }
   }, [selected?.abs])
+
+  // LOADING into the editor is where the file actually gets read. The keyframe
+  // index demuxes end to end - 8s for a 25-minute clip over SMB, and a full
+  // multi-GB read for a feature. That is fine when you have committed to
+  // editing this file; it is not fine merely for clicking on it.
+  useEffect(() => {
+    setKeyframes([]); setAvgGap(0); setSprites(null)
+    if (!loaded || loaded.is_dir) return
+    let cancelled = false
+    const q = (u: string) => `${u}?path=${encodeURIComponent(loaded.abs)}`
+    ;(async () => {
+      setIndexing(true)
+      try {
+        const k = await (await fetch(q('/api/keyframes'))).json()
+        if (cancelled || k.error) return
+        setKeyframes(k.times ?? []); setAvgGap(k.avg_gap ?? 0)
+        // Cache-only: never starts a sprite build.
+        const s: SpriteIndex = await (await fetch(q('/api/sprites') + '&peek=true')).json()
+        if (!cancelled && s && s.done && s.sheets > 0) setSprites(s)
+      } catch { /* ignored: the scrubber simply has no ticks */ }
+      finally { if (!cancelled) setIndexing(false) }
+    })()
+    return () => { cancelled = true }
+  }, [loaded?.abs])
+
+  // Arrow keys jump 5 seconds. Ignored while typing, or the path box would eat
+  // every left/right press.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return
+      const v = videoRef.current
+      if (!v || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
+      e.preventDefault()
+      const t = Math.max(0, Math.min(v.duration || 0, v.currentTime + (e.key === 'ArrowRight' ? 5 : -5)))
+      v.currentTime = t
+      setCurTime(t)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const rebuildThumbs = async () => {
     if (!selected) return
@@ -417,8 +442,12 @@ export default function App() {
               path={selected.abs}
               duration={duration}
               current={curTime}
-              keyframes={keyframes}
-              sprites={sprites}
+              // Ticks belong to the loaded clip, so they are only shown when the
+              // thing you are previewing is the thing you are editing.
+              keyframes={loaded?.abs === selected.abs ? keyframes : []}
+              sprites={loaded?.abs === selected.abs ? sprites : null}
+              indexing={indexing && loaded?.abs === selected.abs}
+              loadedForEditing={loaded?.abs === selected.abs}
               onSeek={(t) => { if (videoRef.current) { videoRef.current.currentTime = t; setCurTime(t) } }}
             />
           )}

@@ -27,6 +27,7 @@ const fmt = (t: number) => {
 
 export default function Scrubber({
   path, duration, current, keyframes, sprites, onSeek,
+  indexing = false, loadedForEditing = false,
 }: {
   path: string
   duration: number
@@ -34,6 +35,8 @@ export default function Scrubber({
   keyframes: number[]
   sprites: SpriteIndex | null
   onSeek: (t: number) => void
+  indexing?: boolean
+  loadedForEditing?: boolean
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [hoverT, setHoverT] = useState<number | null>(null)
@@ -100,7 +103,7 @@ export default function Scrubber({
         onMouseMove={(e) => { setHoverT(timeAt(e.clientX)); setHoverX(e.clientX) }}
         onMouseLeave={() => setHoverT(null)}
         onClick={(e) => onSeek(timeAt(e.clientX))}
-        className="relative h-16 cursor-pointer rounded bg-white/10"
+        className="relative h-10 cursor-pointer rounded bg-white/10"
       >
         {/* keyframe ticks: where a lossless cut may land. Full height, because
             without thumbnails this bar's job is showing cut geometry. */}
@@ -162,13 +165,18 @@ export default function Scrubber({
         </div>
       )}
 
-      <div className="mt-1 flex items-center gap-3 text-[11px] text-white/35">
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-white/35">
         <span className="font-mono">{fmt(current)} / {fmt(duration)}</span>
+        <span className="text-white/20">← → 5s</span>
         {!!keyframes.length && (
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-px bg-sky-400/70" />
             {keyframes.length} keyframes
           </span>
+        )}
+        {indexing && <span className="text-amber-300/70">indexing keyframes…</span>}
+        {!keyframes.length && !indexing && !loadedForEditing && (
+          <span className="text-white/25">Load into editor for keyframe ticks</span>
         )}
         {sprites && !sprites.done && !sprites.error && (
           <span className="text-amber-300/70">
