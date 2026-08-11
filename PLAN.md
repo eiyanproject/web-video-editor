@@ -678,7 +678,7 @@ allow, documented in the setup guide alongside a verification command
 |---|---|---|
 | **0** | Scaffolding — Axum service, Vite app, nginx config, settings, path allowlist, library browser, paste-a-path resolver, basic integrity warnings, direct play with byte ranges | End of this phase you can browse the JBOD and play files in the browser |
 | **1** | ffprobe cache, keyframe index, sprite generation, hover-scrub timeline, **real integrity checking** (no video stream, bad moov, decode errors, TS timestamp discontinuities) | The right pane is fully done |
-| **2** | Segment model, split/delete/undelete, zoomable canvas timeline with keyframe ticks, frame-accurate stepping, undo/redo, **drag and drop player → editor** | The left pane is usable, nothing exports yet |
+| **2** | ✅ Segment model, split/delete/undelete, zoomable canvas timeline with keyframe ticks, frame stepping, undo/redo, drag and drop, per-cut cost badges | The left pane is usable, nothing exports yet |
 | **3** | Export engine v1: keyframe-snap copy path, merge + separate modes, **remux / container conversion incl. MPEG-TS → MP4 (§2.7)**, job queue, SSE progress, output verification | **First genuinely useful build.** Fully lossless, cuts snap to keyframes |
 | **4** | Smart-cut: boundary fragment encoder, parameter matching, Tier 1 concat, Tier 2 fallback, per-cut cost badges | Frame-exact cuts. The headline feature |
 | **5** | Polish: MKV preview remux cache, HLS preview for incompatible codecs, audio waveform, batch queue, export presets, keyboard shortcuts, theming pass | |

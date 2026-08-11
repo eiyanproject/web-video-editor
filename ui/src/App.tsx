@@ -3,6 +3,9 @@ import Settings from './Settings'
 import Logs from './Logs'
 import Scrubber, { type SpriteIndex } from './Scrubber'
 import MediaInfo, { type Probe } from './MediaInfo'
+import Timeline from './Timeline'
+import SegmentList from './SegmentList'
+import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary } from './segments'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -124,6 +127,58 @@ export default function App() {
   const [deepBusy, setDeepBusy] = useState(false)
   const [indexing, setIndexing] = useState(false)
 
+  // ---- Phase 2: the edit ---------------------------------------------------
+
+  // The global key handler is registered once; these refs let it reach the
+  // current handlers without re-binding a capture-phase listener every render.
+  const probeRef = useRef<Probe | null>(null)
+  const splitRef = useRef<(() => void) | null>(null)
+  const toggleRef = useRef<(() => void) | null>(null)
+  const undoRef = useRef<(() => void) | null>(null)
+  const redoRef = useRef<(() => void) | null>(null)
+
+  // The editor keeps its OWN probe of the loaded clip, independent of whatever
+  // the player currently shows. Closing the preview - or previewing a different
+  // file - must not disturb an edit in progress.
+  const [loadedProbe, setLoadedProbe] = useState<Probe | null>(null)
+  const fps = loadedProbe?.fps || 25
+  const editDuration = loaded ? (loadedProbe?.duration ?? 0) : 0
+  const { segs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
+  const [selectedSeg, setSelectedSeg] = useState<number | null>(null)
+  const dragBase = useRef<typeof segs | null>(null)
+
+  const seek = (t: number) => {
+    const v = videoRef.current
+    if (!v) return
+    const clamped = Math.max(0, Math.min(v.duration || 0, t))
+    v.currentTime = clamped
+    setCurTime(clamped)
+  }
+
+  // Boundary drags emit continuously; only the final position becomes an undo
+  // step, otherwise a single drag would fill the history with hundreds of them.
+  const onMoveBoundary = (index: number, t: number, commit: boolean) => {
+    if (commit) { dragBase.current = null; return }
+    if (!dragBase.current) dragBase.current = segs
+    apply((cur) => moveBoundary(dragBase.current ?? cur, index, t))
+  }
+
+  const splitHere = () => {
+    apply((cur) => splitAt(cur, curTime))
+    say(`Cut at ${fmtTimecode(curTime).slice(0, 8)}`)
+  }
+
+  const toggleSelected = () => {
+    const id = selectedSeg ?? segs.find((s) => curTime >= s.start && curTime < s.end)?.id
+    if (id != null) apply((cur) => toggleKeep(cur, id))
+  }
+
+  probeRef.current = probe
+  splitRef.current = splitHere
+  toggleRef.current = toggleSelected
+  undoRef.current = undo
+  redoRef.current = redo
+
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000) }
 
   // SELECTING a file is metadata-only. ffprobe reads headers, not the file, so
@@ -150,13 +205,17 @@ export default function App() {
   // multi-GB read for a feature. That is fine when you have committed to
   // editing this file; it is not fine merely for clicking on it.
   useEffect(() => {
-    setKeyframes([]); setAvgGap(0); setSprites(null)
+    setKeyframes([]); setAvgGap(0); setSprites(null); setLoadedProbe(null)
     if (!loaded || loaded.is_dir) return
     let cancelled = false
     const q = (u: string) => `${u}?path=${encodeURIComponent(loaded.abs)}`
     ;(async () => {
       setIndexing(true)
       try {
+        const lp = await (await fetch(q('/api/probe'))).json()
+        if (cancelled) return
+        if (!lp.error) setLoadedProbe(lp)
+
         const k = await (await fetch(q('/api/keyframes'))).json()
         if (cancelled || k.error) return
         setKeyframes(k.times ?? []); setAvgGap(k.avg_gap ?? 0)
@@ -180,12 +239,37 @@ export default function App() {
       const el = e.target as HTMLElement | null
       if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return
       const v = videoRef.current
-      if (!v || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
-      e.preventDefault()
-      e.stopPropagation()
-      const t = Math.max(0, Math.min(v.duration || 0, v.currentTime + (e.key === 'ArrowRight' ? 5 : -5)))
-      v.currentTime = t
-      setCurTime(t)
+      if (!v) return
+
+      // Frame stepping. The step is 1/fps of the loaded clip, so fractional
+      // rates (23.976, 29.97) land on real frames instead of drifting.
+      const frame = 1 / (probeRef.current?.fps || 25)
+      const jump = (d: number) => {
+        e.preventDefault(); e.stopPropagation()
+        const t = Math.max(0, Math.min(v.duration || 0, v.currentTime + d))
+        v.currentTime = t; setCurTime(t)
+      }
+
+      switch (e.key) {
+        case 'ArrowRight': return jump(5)
+        case 'ArrowLeft': return jump(-5)
+        case '.': return jump(frame)
+        case ',': return jump(-frame)
+        case ' ':
+          e.preventDefault(); e.stopPropagation()
+          v.paused ? v.play().catch(() => {}) : v.pause()
+          return
+        case 's': case 'S':
+          e.preventDefault(); splitRef.current?.(); return
+        case 'Delete': case 'Backspace':
+          e.preventDefault(); toggleRef.current?.(); return
+        case 'z': case 'Z':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            e.shiftKey ? redoRef.current?.() : undoRef.current?.()
+          }
+          return
+      }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -473,19 +557,70 @@ export default function App() {
               const raw = e.dataTransfer.getData('application/x-veditor-clip')
               if (raw) { const c = JSON.parse(raw); setLoaded(c); setSelected(c); say(`Loaded ${c.name}`) }
             }}
-            className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-sm text-white/30"
+            className="flex min-h-0 flex-1 flex-col"
           >
-            {loaded ? (
+            {loaded && editDuration > 0 ? (
               <>
-                <div className="text-white/70">{loaded.name}</div>
-                <div className="max-w-full truncate text-xs text-white/30">{loaded.abs}</div>
-                <div className="mt-3 text-xs">Timeline and cutting tools arrive in Phase 2</div>
+                <div className="truncate border-b border-white/10 px-3 py-1.5 text-xs text-white/60">
+                  {loaded.name}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+                  <Btn title="Cut at the playhead (S)" tone="accent" onClick={splitHere}>✂ Cut here</Btn>
+                  <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
+                  <div className="mx-1 h-4 w-px bg-white/15" />
+                  <Btn title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>↶</Btn>
+                  <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↷</Btn>
+                  <Btn title="Remove every cut and start again" onClick={reset}>Reset</Btn>
+                  <div className="flex-1" />
+                  <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(curTime)}</span>
+                  <span className="text-[10px] text-white/25">frame {Math.round(curTime * fps)}</span>
+                </div>
+
+                <Timeline
+                  duration={editDuration}
+                  current={curTime}
+                  segs={segs}
+                  keyframes={keyframes}
+                  fps={fps}
+                  onSeek={seek}
+                  onMoveBoundary={onMoveBoundary}
+                  onSelectSegment={setSelectedSeg}
+                  selectedId={selectedSeg}
+                />
+
+                <div className="flex items-center gap-1 border-y border-white/10 px-2 py-1 text-[11px] text-white/40">
+                  <span>step</span>
+                  <Btn title="Back one frame (,)" onClick={() => seek(curTime - 1 / fps)}>◀|</Btn>
+                  <Btn title="Forward one frame (.)" onClick={() => seek(curTime + 1 / fps)}>|▶</Btn>
+                  <Btn title="Back 5s (←)" onClick={() => seek(curTime - 5)}>−5s</Btn>
+                  <Btn title="Forward 5s (→)" onClick={() => seek(curTime + 5)}>+5s</Btn>
+                  <div className="flex-1" />
+                  <span className="text-white/20">S cut · Del keep/drop · , . frame · Space play</span>
+                </div>
+
+                <SegmentList
+                  segs={segs}
+                  duration={editDuration}
+                  keyframes={keyframes}
+                  fps={fps}
+                  selectedId={selectedSeg}
+                  onSelect={setSelectedSeg}
+                  onToggle={(id) => apply((cur) => toggleKeep(cur, id))}
+                  onSeek={seek}
+                  onMerge={(i) => apply((cur) => mergeAt(cur, i))}
+                />
               </>
             ) : (
-              <>
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-sm text-white/30">
                 <div>No clip loaded</div>
-                <div className="text-xs text-white/20">Select one on the right and press “Load into editor”, or drag it here</div>
-              </>
+                <div className="text-xs text-white/20">
+                  Select one on the right and press “Load into editor”, or drag it here
+                </div>
+                {loaded && !editDuration && (
+                  <div className="text-xs text-amber-300/70">Reading {loaded.name}…</div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -605,6 +740,19 @@ export default function App() {
               {muted ? '🔇' : '🔊'}
             </Btn>
             <Btn title="Fullscreen" disabled={!selected} onClick={() => videoRef.current?.requestFullscreen()}>⛶</Btn>
+            <Btn title="Close this video and free the player" disabled={!selected}
+              onClick={() => {
+                // Pausing and clearing the source first stops the browser from
+                // continuing to pull the file over the network after unload.
+                const v = videoRef.current
+                if (v) { v.pause(); v.removeAttribute('src'); v.load() }
+                // Player state only. The editor keeps its clip and its cuts.
+                setSelected(null); setCurTime(0); setDuration(0)
+                setProbe(null); setDeep(null); setPlayError(null)
+                say(loaded ? 'Preview closed — your edit is untouched' : 'Video closed')
+              }}>
+              ⏏ Unload
+            </Btn>
             <Btn
               title="Generate hover thumbnails for this file. Reads the entire file once, so it is slow over a network share — do it for files you are actually editing."
               disabled={!selected} onClick={rebuildThumbs}>

@@ -25,14 +25,15 @@ The timeline also draws **keyframe tick marks**, and each cut point is labelled 
 
 ## Status
 
-**Phase 1 complete.** Library browsing over SMB shares, byte-range playback, media
-analysis with a disk cache, keyframe index, and a hover-scrub timeline with thumbnails.
+**Phase 2 complete.** Everything except the export engine: browse an SMB share, load a
+clip, cut it on a zoomable canvas timeline with keyframe ticks, drop the segments you
+don't want, and see exactly what each cut will cost before you commit.
 
 | Phase | State |
 |---|---|
 | 0 · scaffolding, library browser, range playback, SMB settings, logs | ✅ done |
 | 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ done |
-| 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | |
+| 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | ✅ done |
 | 3 · export engine (keyframe-snap), remux incl. MPEG-TS → MP4 | |
 | 4 · smart-cut (frame-exact) | algorithm validated in [`spike/`](spike/) |
 | 5 · preview transcode, waveform, batch queue, presets | |
