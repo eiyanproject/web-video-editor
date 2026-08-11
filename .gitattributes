@@ -1,0 +1,7 @@
+# Shell scripts and Dockerfiles must keep LF endings. A CRLF install.sh fails on
+# Linux with "bad interpreter: /usr/bin/env bash^M", which is a baffling error to
+# debug for anyone who clones this from a Windows-authored repo.
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf

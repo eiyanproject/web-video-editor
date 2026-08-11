@@ -1,0 +1,10 @@
+# Dev image: rust toolchain plus the binaries the app shells out to.
+#   cifs-utils  -> mount.cifs, for SMB shares configured in the UI
+#   ffmpeg      -> not used until Phase 1, installed now to avoid a rebuild later
+FROM rust:1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cifs-utils ffmpeg procps \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app

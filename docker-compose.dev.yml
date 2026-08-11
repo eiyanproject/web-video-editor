@@ -1,0 +1,70 @@
+# Dev stack: source bind-mounted,
+# no toolchain installed on the host.
+#
+# Storage is NOT configured here. Library folders, SMB shares, credentials and
+# the export destination are all set in the Settings page and persisted to
+# ./config/settings.json on the host, so they survive container rebuilds and
+# you only enter them once. The app starts with nothing and asks.
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    image: wve-api-dev:latest
+    container_name: wve-api-dev
+    working_dir: /app
+    # NOT `bash -lc`: a login shell re-sources /etc/profile, which resets PATH
+    # and loses the rust image's /usr/local/cargo/bin.
+    command: bash -c "cargo run"
+    volumes:
+      - ./api:/app
+      - ./config:/config          # settings.json + stored credentials (persistent)
+      - veditor-cargo:/usr/local/cargo/registry
+      - veditor-target:/app/target
+      # NO media or output bind mounts by default, and no seeded roots.
+      #
+      # A writable destination nobody chose is how you quietly fill a volume you
+      # forgot about, and a default library root implies access that was never
+      # configured. Connect a share in Settings instead - it mounts inside the
+      # container at /mnt/smb/<name> and needs nothing here.
+      #
+      # To expose a LOCAL host folder as well, uncomment and set the path:
+      # - /c/Users/you/Videos:/media:ro
+    environment:
+      VEDITOR_CONFIG: "/config/settings.json"
+      VEDITOR_BIND: "0.0.0.0:8080"
+      RUST_LOG: "veditor_api=debug,tower_http=info"
+      CARGO_BUILD_JOBS: "2"
+    # mount.cifs needs CAP_SYS_ADMIN. If mounting still fails on Docker Desktop,
+    # swap these two lines for `privileged: true`.
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
+    security_opt:
+      - apparmor:unconfined
+    ports:
+      - "8180:8080"
+    mem_limit: 2g
+    cpus: 3
+
+  ui:
+    image: node:22-alpine
+    container_name: wve-ui-dev
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    volumes:
+      - ./ui:/app
+      - veditor-node:/app/node_modules
+    ports:
+      - "5273:5273"
+    environment:
+      VITE_API_TARGET: "http://api:8080"
+    mem_limit: 512m
+    depends_on:
+      - api
+
+volumes:
+  veditor-cargo:
+  veditor-target:
+  veditor-node:

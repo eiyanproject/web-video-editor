@@ -1,0 +1,44 @@
+# Production stack. Managed by ./install.sh - re-run that script to update.
+#
+# No media or output bind mounts by default, and no seeded library folders: a
+# writable destination nobody chose is how you quietly fill a volume you forgot
+# about. Connect a share in Settings instead; it mounts inside the container at
+# /mnt/smb/<name>. Everything is persisted to ./config on the host.
+
+services:
+  api:
+    build:
+      context: ./api
+    image: web-video-editor-api:latest
+    container_name: wve-api
+    restart: unless-stopped
+    volumes:
+      - ./config:/config
+      # Uncomment to expose a LOCAL folder from the host as well:
+      # - /srv/media:/media:ro
+    environment:
+      VEDITOR_CONFIG: "/config/settings.json"
+      VEDITOR_BIND: "0.0.0.0:8080"
+      RUST_LOG: "${RUST_LOG:-veditor_api=info,tower_http=warn}"
+    # mount.cifs needs CAP_SYS_ADMIN. If mounting fails on an unusual host,
+    # replace these with `privileged: true`.
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
+    security_opt:
+      - apparmor:unconfined
+    # Optional: Intel iGPU for faster thumbnail scanning and future preview
+    # transcoding. Harmless to leave commented out - trim/join needs no GPU.
+    # devices:
+    #   - /dev/dri:/dev/dri
+
+  ui:
+    build:
+      context: ./ui
+    image: web-video-editor-ui:latest
+    container_name: wve-ui
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8088}:80"
+    depends_on:
+      - api
