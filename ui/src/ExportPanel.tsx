@@ -31,6 +31,7 @@ const tc = (t: number) => {
 
 export default function ExportPanel({
   source, segs, outputDir, onSetOutputDir, onToast, canExact = true, reencodeSecs = 0,
+  mode, onSetMode, startRef,
 }: {
   source: string
   segs: Segment[]
@@ -42,8 +43,13 @@ export default function ExportPanel({
   canExact?: boolean
   /// Seconds that frame-exact mode would rebuild, for the label.
   reencodeSecs?: number
+  /// Mode is owned by the parent so a keystroke can set it.
+  mode: 'merge' | 'separate' | 'separate_merge'
+  onSetMode: (m: 'merge' | 'separate' | 'separate_merge') => void
+  /// Lets Ctrl+Enter start the export from anywhere.
+  startRef?: React.MutableRefObject<(() => void) | null>
 }) {
-  const [mode, setMode] = useState<'merge' | 'separate' | 'separate_merge'>('merge')
+  const setMode = onSetMode
   const [showPicker, setShowPicker] = useState(false)
   const [container, setContainer] = useState('')
   const [overwrite, setOverwrite] = useState(false)
@@ -97,6 +103,17 @@ export default function ExportPanel({
   }
 
   const done = jobs.filter((j) => j.status !== 'running' && j.status !== 'queued')
+
+  // Exposed so the global shortcut can fire it, with the same guards.
+  if (startRef) {
+    startRef.current = () => {
+      if (busy || active || !kept.length || !outputDir.trim()) {
+        onToast(!outputDir.trim() ? 'Set an output folder first' : 'Export already running')
+        return
+      }
+      start()
+    }
+  }
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-white/[0.02]">

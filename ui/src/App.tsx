@@ -189,6 +189,11 @@ export default function App() {
   const [playError, setPlayError] = useState<string | null>(null)
   const [pasted, setPasted] = useState('')
   const [showPaste, setShowPaste] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  // Export mode lives here so a keystroke can set it and the panel follows.
+  const [exportMode, setExportMode] = useState<'merge' | 'separate' | 'separate_merge'>('merge')
+  const listRef = useRef<HTMLDivElement>(null)
+  const filterRef = useRef<HTMLInputElement>(null)
   const pasteRef = useRef<HTMLInputElement>(null)
   const [muted, setMuted] = useState(false)
   const [curTime, setCurTime] = useState(0)
@@ -207,12 +212,24 @@ export default function App() {
   const [indexing, setIndexing] = useState(false)
   const [peaks, setPeaks] = useState<number[] | undefined>(undefined)
   const [waveBusy, setWaveBusy] = useState(false)
+  const [waveAuto, setWaveAuto] = useState(false)
 
   // ---- Phase 2: the edit ---------------------------------------------------
 
   // The global key handler is registered once; these refs let it reach the
   // current handlers without re-binding a capture-phase listener every render.
   const probeRef = useRef<Probe | null>(null)
+  const selectedRef = useRef<Entry | null>(null)
+  const focusListRef = useRef<(() => void) | null>(null)
+  const focusFilterRef = useRef<(() => void) | null>(null)
+  const openPasteRef = useRef<(() => void) | null>(null)
+  const loadIntoEditorRef = useRef<(() => void) | null>(null)
+  const transferTimeRef = useRef<(() => void) | null>(null)
+  const focusTimecodeRef = useRef<(() => void) | null>(null)
+  const snapKeyframeRef = useRef<(() => void) | null>(null)
+  const stepSegmentRef = useRef<((d: number) => void) | null>(null)
+  const saveEditRef = useRef<(() => void) | null>(null)
+  const exportRef = useRef<(() => void) | null>(null)
   /// Which player the keyboard should drive: whichever was last played,
   /// clicked or seeked.
   const lastPlayerRef = useRef<'editor' | 'preview'>('editor')
@@ -394,6 +411,47 @@ export default function App() {
   }
 
   probeRef.current = probe
+  selectedRef.current = selected
+
+  // --- keyboard actions -----------------------------------------------------
+  focusListRef.current = () => {
+    const first = listRef.current?.querySelector<HTMLButtonElement>('button[data-row]')
+    first?.focus()
+  }
+  focusFilterRef.current = () => filterRef.current?.focus()
+  openPasteRef.current = () => setShowPaste(true)
+  loadIntoEditorRef.current = () => {
+    if (!selected || selected.is_dir) { say('Select a video first'); return }
+    setLoaded(selected); say(`Loaded ${selected.name}`)
+  }
+  // The move their workflow actually turns on: take where the preview is and
+  // put the editor there, with the timecode filled in ready to nudge.
+  transferTimeRef.current = () => {
+    const t = videoRef.current?.currentTime
+    if (t == null) { say('Nothing playing in the preview'); return }
+    setTcInput(fmtTimecode(t))
+    if (editVideoRef.current) { editVideoRef.current.currentTime = t; setEditTime(t) }
+    say(`Editor moved to ${fmtTimecode(t).slice(0, 8)}`)
+  }
+  focusTimecodeRef.current = () => {
+    tcRef.current?.focus()
+    tcRef.current?.setSelectionRange(6, 6)   // land on seconds, the usual target
+  }
+  snapKeyframeRef.current = () => {
+    if (!keyframes.length) { say('No keyframe index yet'); return }
+    const t = snapToKeyframe(editTime, keyframes)
+    seek(t); setTcInput(fmtTimecode(t))
+    say(`Snapped to keyframe ${fmtTimecode(t).slice(0, 8)}`)
+  }
+  stepSegmentRef.current = (d: number) => {
+    if (!segs.length) return
+    const cur = segs.findIndex((x) => x.id === selectedSeg)
+    const next = Math.max(0, Math.min(segs.length - 1, (cur < 0 ? 0 : cur) + d))
+    const seg = segs[next]
+    setSelectedSeg(seg.id); seek(seg.start)
+    say(`Segment ${next + 1} of ${segs.length}${seg.keep ? '' : ' (dropped)'}`)
+  }
+  saveEditRef.current = () => saveEdit(false)
   splitRef.current = splitHere
   toggleRef.current = toggleSelected
   undoRef.current = undo
@@ -405,11 +463,23 @@ export default function App() {
   // browsing a folder of fifty clips costs nothing.
   useEffect(() => {
     setProbe(null); setDeep(null); setPeaks(undefined)
+    if (waveTimer.current) { clearTimeout(waveTimer.current); waveTimer.current = null }
     if (!selected || selected.is_dir) return
-    // Cache-only: never starts a scan just because a file was clicked.
-    fetch(`/api/waveform?peek=true&path=${encodeURIComponent(selected.abs)}`)
+    // Cached waveforms are free, so always look. Generating one means reading
+    // the whole file, so that only happens when the switch is on.
+    const wpath = selected.abs
+    fetch(`/api/waveform?peek=true&path=${encodeURIComponent(wpath)}`)
       .then((r) => r.json())
-      .then((d) => { if (d?.peaks?.length) setPeaks(d.peaks) })
+      .then((d) => {
+        if (d?.peaks?.length) { setPeaks(d.peaks); return }
+        // Wait until the selection settles. Clicking down a folder would
+        // otherwise start a full read for every file passed through.
+        if (waveAutoRef.current) {
+          waveTimer.current = window.setTimeout(() => {
+            if (selectedRef.current?.abs === wpath) buildWaveformFor(wpath)
+          }, 2500)
+        }
+      })
       .catch(() => {})
     let cancelled = false
     ;(async () => {
@@ -482,25 +552,50 @@ export default function App() {
         isEditor ? setEditTime(t) : setCurTime(t)
       }
 
+      const take = () => { e.preventDefault(); e.stopPropagation() }
+
+      // Ctrl/Cmd combinations first, so plain letters stay free.
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case 'z': take(); e.shiftKey ? redoRef.current?.() : undoRef.current?.(); return
+          case 's': take(); saveEditRef.current?.(); return
+          case 'enter': take(); exportRef.current?.(); return
+        }
+        return
+      }
+
       switch (e.key) {
         case 'ArrowRight': return jump(5)
         case 'ArrowLeft': return jump(-5)
         case '.': return jump(frame)
         case ',': return jump(-frame)
         case ' ':
-          e.preventDefault(); e.stopPropagation()
-          v.paused ? v.play().catch(() => {}) : v.pause()
-          return
-        case 's': case 'S':
-          e.preventDefault(); splitRef.current?.(); return
-        case 'Delete': case 'Backspace':
-          e.preventDefault(); toggleRef.current?.(); return
-        case 'z': case 'Z':
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault()
-            e.shiftKey ? redoRef.current?.() : undoRef.current?.()
-          }
-          return
+          take(); v.paused ? v.play().catch(() => {}) : v.pause(); return
+
+        // --- moving around ---
+        case 'f': case 'F': take(); focusListRef.current?.(); return
+        case '/': take(); focusFilterRef.current?.(); return
+        case 'p': case 'P': take(); openPasteRef.current?.(); return
+        case 'l': case 'L': take(); loadIntoEditorRef.current?.(); return
+
+        // --- carrying a time from the preview into the editor ---
+        case 't': case 'T': take(); transferTimeRef.current?.(); return
+        case 'g': case 'G': take(); focusTimecodeRef.current?.(); return
+        case 'k': case 'K': take(); snapKeyframeRef.current?.(); return
+
+        // --- cutting ---
+        case 's': case 'S': take(); splitRef.current?.(); return
+        case 'Delete': case 'Backspace': take(); toggleRef.current?.(); return
+        case '[': take(); stepSegmentRef.current?.(-1); return
+        case ']': take(); stepSegmentRef.current?.(1); return
+
+        // --- export mode, then go ---
+        case '1': take(); setExportMode('merge'); say('Export: single file'); return
+        case '2': take(); setExportMode('separate'); say('Export: separate files'); return
+        case '3': take(); setExportMode('separate_merge'); say('Export: safe join'); return
+
+        case '?': take(); setShowHelp((h) => !h); return
+        case 'Escape': setShowHelp(false); return
       }
     }
     window.addEventListener('keydown', onKey, true)
@@ -536,19 +631,31 @@ export default function App() {
     if (showPaste) pasteRef.current?.focus()
   }, [showPaste])
 
-  const buildWaveform = async () => {
-    if (!selected) return
+  const waveTimer = useRef<number | null>(null)
+  const waveAutoRef = useRef(false)
+  waveAutoRef.current = waveAuto
+
+  const buildWaveformFor = async (path: string) => {
     setWaveBusy(true)
-    say('Reading audio…')
     try {
-      const r = await fetch(`/api/waveform?path=${encodeURIComponent(selected.abs)}`)
+      const r = await fetch(`/api/waveform?path=${encodeURIComponent(path)}`)
       const d = await r.json()
       if (!r.ok) throw new Error(d.error)
-      setPeaks(d.peaks)
-      say(`Waveform ready (${(d.took_ms / 1000).toFixed(1)}s)`)
-    } catch (e: any) {
-      setError(String(e.message ?? e))
-    } finally { setWaveBusy(false) }
+      // The clip may have changed while a long read was in flight.
+      if (selectedRef.current?.abs === path) setPeaks(d.peaks)
+    } catch { /* no waveform is not worth an error banner */ }
+    finally { setWaveBusy(false) }
+  }
+
+  const toggleWaveAuto = async () => {
+    const next = !waveAuto
+    setWaveAuto(next)
+    await fetch('/api/settings', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ waveform_auto: next }),
+    }).catch(() => {})
+    if (next && selected && !peaks?.length) buildWaveformFor(selected.abs)
+    if (!next) say('Waveform off — cached ones still show, and expire after an hour')
   }
 
   const rebuildThumbs = async () => {
@@ -608,6 +715,7 @@ export default function App() {
         serverOutputDir.current = d.output_dir ?? ''
         setOutputDir(d.output_dir ?? '')
         setAutosave(d.autosave_edits ?? true)
+        setWaveAuto(d.waveform_auto ?? false)
       })
       .catch(() => {})
 
@@ -816,6 +924,75 @@ export default function App() {
 
   return (
     <div className="flex h-full w-full flex-col">
+      {showHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+          onClick={() => setShowHelp(false)}>
+          <div onClick={(e) => e.stopPropagation()}
+            className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-white/15 bg-[#12141a] p-5 shadow-xl">
+            <div className="mb-3 flex items-center">
+              <h2 className="text-base font-semibold">Keyboard</h2>
+              <span className="ml-2 text-xs text-white/35">the whole flow, without the mouse</span>
+              <div className="flex-1" />
+              <button onClick={() => setShowHelp(false)}
+                className="rounded px-2 text-white/40 hover:bg-white/10 hover:text-white">✕</button>
+            </div>
+            <div className="grid gap-x-8 gap-y-4 text-xs sm:grid-cols-2">
+              {([
+                ['Find the film', [
+                  ['F', 'jump into the file list'],
+                  ['↑ ↓', 'move through it · Enter opens'],
+                  ['/', 'filter this folder'],
+                  ['P', 'paste a path'],
+                ]],
+                ['Watch it', [
+                  ['Space', 'play / pause'],
+                  ['← →', 'jump 5 seconds'],
+                  [', .', 'one frame'],
+                ]],
+                ['Take it to the editor', [
+                  ['L', 'load the selected clip'],
+                  ['T', 'move the editor to where the preview is'],
+                  ['G', 'jump into the timecode box'],
+                  ['↑ ↓', 'in the box: change the digit under the cursor'],
+                  ['← →', 'in the box: move between digits'],
+                  ['K', 'snap to the nearest keyframe'],
+                ]],
+                ['Cut', [
+                  ['S', 'cut at the playhead'],
+                  ['[ ]', 'previous / next segment'],
+                  ['Del', 'keep or drop that segment'],
+                  ['Ctrl+Z', 'undo · Shift to redo'],
+                  ['Ctrl+S', 'save the cut list'],
+                ]],
+                ['Export', [
+                  ['1', 'single file'],
+                  ['2', 'separate files'],
+                  ['3', 'safe join'],
+                  ['Ctrl+Enter', 'start the export'],
+                ]],
+                ['Anywhere', [
+                  ['?', 'this list'],
+                  ['Esc', 'close'],
+                ]],
+              ] as const).map(([group, rows]) => (
+                <div key={group}>
+                  <div className="mb-1 font-medium text-white/70">{group}</div>
+                  {rows.map(([k, what]) => (
+                    <div key={k} className="flex gap-2 py-0.5">
+                      <kbd className="min-w-[4.5rem] shrink-0 rounded bg-white/10 px-1.5 text-center font-mono text-[11px] text-white/80">{k}</kbd>
+                      <span className="text-white/50">{what}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 border-t border-white/10 pt-2 text-[11px] text-white/30">
+              Typing in a box? Only Esc and Enter are taken — everything else is yours.
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div className="absolute left-1/2 top-3 z-50 -translate-x-1/2 rounded bg-emerald-500/90 px-3 py-1.5 text-xs text-white shadow">
           {toast}
@@ -832,6 +1009,7 @@ export default function App() {
               Batch remux
             </button>
             <div className="flex-1" />
+            <Btn title="Keyboard shortcuts (?)" onClick={() => setShowHelp(true)}>⌨ ?</Btn>
             <Btn title="Show the application log: mounts, saves, errors" onClick={() => setPage('logs')}>📋 Log</Btn>
             <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>
           </div>
@@ -1013,6 +1191,9 @@ export default function App() {
                   outputDir={outputDir}
                   onSetOutputDir={setOutputDir}
                   onToast={say}
+                  mode={exportMode}
+                  onSetMode={setExportMode}
+                  startRef={exportRef}
                   canExact={!!loadedProbe?.smartcut_ok}
                   reencodeSecs={segs.slice(0, -1).reduce((n, s) =>
                     n + cutCost(s.end, keyframes, fps).reencode, 0)}
@@ -1169,8 +1350,15 @@ export default function App() {
                 // continuing to pull the file over the network after unload.
                 const v = videoRef.current
                 if (v) { v.pause(); v.removeAttribute('src'); v.load() }
+                // The waveform belonged to this editing session; closing the
+                // clip is the natural moment to throw it away.
+                if (selected) {
+                  fetch(`/api/waveform?path=${encodeURIComponent(selected.abs)}`, { method: 'DELETE' })
+                    .catch(() => {})
+                }
+                if (waveTimer.current) { clearTimeout(waveTimer.current); waveTimer.current = null }
                 // Player state only. The editor keeps its clip and its cuts.
-                setSelected(null); setCurTime(0); setDuration(0)
+                setSelected(null); setCurTime(0); setDuration(0); setPeaks(undefined)
                 setProbe(null); setDeep(null); setPlayError(null)
                 say(loaded ? 'Preview closed — your edit is untouched' : 'Video closed')
               }}>
@@ -1182,9 +1370,10 @@ export default function App() {
               {sprites?.done ? '⟳ Thumbs' : '🖼 Thumbs'}
             </Btn>
             <Btn
-              title="Draw the audio envelope on the scrub bar. Reads the file once (a few seconds), then caches about 20 kB."
-              disabled={!selected || waveBusy} onClick={buildWaveform}>
-              {waveBusy ? '…' : peaks?.length ? '⟳ Wave' : '〜 Wave'}
+              title="Draw the audio envelope on the scrub bar automatically. Each clip is read once (seconds to a minute), cached at about 20 kB, and the cache expires after an hour. Off means nothing is ever read for this."
+              active={waveAuto}
+              disabled={waveBusy} onClick={toggleWaveAuto}>
+              {waveBusy ? '〜 …' : waveAuto ? '〜 Wave on' : '〜 Wave off'}
             </Btn>
             <div className="flex-1" />
             <Btn title="Copy the selected file's path" disabled={!selected} onClick={() => copy(selected!.abs, 'Path')}>⧉ Path</Btn>
@@ -1232,7 +1421,7 @@ export default function App() {
             {!atHome && (
               <>
                 <div className="mx-1 h-4 w-px shrink-0 bg-white/15" />
-                <input value={filter} onChange={(e) => setFilter(e.target.value)}
+                <input ref={filterRef} value={filter} onChange={(e) => setFilter(e.target.value)}
                   placeholder="Filter…"
                   className="w-32 rounded bg-white/10 px-2 py-1 outline-none placeholder:text-white/25" />
                 {filter && <Btn title="Clear the filter" onClick={() => setFilter('')}>✕</Btn>}
@@ -1252,7 +1441,21 @@ export default function App() {
             )}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto text-sm">
+          <div
+            ref={listRef}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+              e.preventDefault(); e.stopPropagation()
+              const rows = Array.from(
+                listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-row]') ?? [],
+              )
+              const i = rows.indexOf(document.activeElement as HTMLButtonElement)
+              const next = Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))
+              rows[next]?.focus()
+              rows[next]?.scrollIntoView({ block: 'nearest' })
+            }}
+            className="min-h-0 flex-1 overflow-auto text-sm"
+          >
             {nothingConnected && !error && (
               <div className="m-3 rounded-lg border border-indigo-400/30 bg-indigo-500/10 p-5">
                 <div className="mb-1 text-base font-medium text-white/90">
@@ -1298,6 +1501,7 @@ export default function App() {
                   selected?.abs === e.abs ? 'bg-indigo-500/20' : ''
                 }`}>
                 <button
+                  data-row
                   onClick={() => (e.is_dir ? openDir(e.abs) : (setSelected(e), setPlayError(null)))}
                   draggable={!e.is_dir}
                   onDragStart={(ev) => ev.dataTransfer.setData('application/x-veditor-clip', JSON.stringify(e))}

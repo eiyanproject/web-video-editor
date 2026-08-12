@@ -705,6 +705,32 @@ pub struct Waveform {
 
 const WAVE_BUCKETS: usize = 1800;
 
+/// Waveforms are swept after this long. They are cheap to hold but they are
+/// also the least reused thing in the cache - you draw one, use it while
+/// editing that clip, and move on.
+const WAVE_TTL_SECS: u64 = 3600;
+
+/// Deletes waveform caches older than the TTL. Runs on a timer from main.
+pub async fn sweep_waveforms() {
+    let root = cache_root();
+    let Ok(mut rd) = tokio::fs::read_dir(&root).await else { return };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    while let Ok(Some(e)) = rd.next_entry().await {
+        let f = e.path().join("waveform.json");
+        let Ok(md) = tokio::fs::metadata(&f).await else { continue };
+        let age = md.modified().ok().and_then(|t| now.duration_since(t).ok());
+        if age.map(|a| a.as_secs() > WAVE_TTL_SECS).unwrap_or(false)
+            && tokio::fs::remove_file(&f).await.is_ok()
+        {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!("swept {removed} waveform cache(s) older than an hour");
+    }
+}
+
 /// Peak envelope of the audio, for spotting silence and scene changes by eye.
 ///
 /// Opt-in like the thumbnails, and for the same reason: decoding the audio means
@@ -786,6 +812,19 @@ pub async fn get_waveform(
     }
     tracing::info!("waveform for {} in {:.1}s", p.display(), t0.elapsed().as_secs_f64());
     Ok(Json(wf))
+}
+
+/// Drops one cached waveform. Called when a clip is closed: the envelope was
+/// for that editing session, and keeping it around earns nothing.
+pub async fn drop_waveform(
+    State(st): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> Json<serde_json::Value> {
+    let Ok((_p, dir)) = resolve_with_cache(&st, &q.path).await else {
+        return Json(serde_json::json!({ "ok": true, "removed": false }));
+    };
+    let removed = tokio::fs::remove_file(dir.join("waveform.json")).await.is_ok();
+    Json(serde_json::json!({ "ok": true, "removed": removed }))
 }
 
 // ---------------------------------------------------------------- deep check

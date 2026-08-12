@@ -94,6 +94,11 @@ pub struct Settings {
     /// Save the cut list automatically as it changes.
     #[serde(default = "yes")]
     pub autosave_edits: bool,
+    /// Draw the audio waveform automatically when a clip is opened. Off by
+    /// default: it means reading the whole file, and that is not something to
+    /// do behind someone's back.
+    #[serde(default)]
+    pub waveform_auto: bool,
     /// Credentials used by any share that leaves its own blank. Most people use
     /// one account for every share on the same NAS, so typing it once is enough.
     #[serde(default)]
@@ -116,6 +121,7 @@ impl Default for Settings {
             default_domain: String::new(),
             edits_dir: String::new(),
             autosave_edits: true,
+            waveform_auto: false,
         }
     }
 }
@@ -643,6 +649,7 @@ struct SettingsPublic {
     has_default_password: bool,
     edits_dir: String,
     autosave_edits: bool,
+    waveform_auto: bool,
 }
 
 async fn is_mounted(mp: &str) -> bool {
@@ -691,6 +698,7 @@ async fn get_settings(State(st): State<AppState>) -> Json<SettingsPublic> {
         has_default_password: !s.default_password.is_empty(),
         edits_dir: s.edits_dir.clone(),
         autosave_edits: s.autosave_edits,
+        waveform_auto: s.waveform_auto,
     })
 }
 
@@ -717,6 +725,8 @@ struct SettingsUpdate {
     edits_dir: Option<String>,
     #[serde(default)]
     autosave_edits: Option<bool>,
+    #[serde(default)]
+    waveform_auto: Option<bool>,
 }
 
 async fn put_settings(
@@ -770,6 +780,7 @@ async fn put_settings(
         }
         if let Some(v) = u.edits_dir { s.edits_dir = v; }
         if let Some(v) = u.autosave_edits { s.autosave_edits = v; }
+        if let Some(v) = u.waveform_auto { s.waveform_auto = v; }
     }
     let s = st.settings.read().await.clone();
     save_settings(&st.config_path, &s)
@@ -1160,6 +1171,16 @@ async fn main() -> anyhow::Result<()> {
     // alone until you press Reconnect.
     spawn_initial_mount(state.clone());
 
+    // Waveform caches expire after an hour. This is the one sweep worth having
+    // on a timer: unlike a share, a stale file on local disk costs nothing to
+    // check and never wakes anything up.
+    tokio::spawn(async move {
+        loop {
+            media::sweep_waveforms().await;
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+        }
+    });
+
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/browse", get(browse))
@@ -1175,7 +1196,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sprites", get(media::get_sprites))
         .route("/api/sprites/sheet", get(media::get_sprite_sheet))
         .route("/api/poster", get(media::get_poster))
-        .route("/api/waveform", get(media::get_waveform))
+        .route("/api/waveform", get(media::get_waveform).delete(media::drop_waveform))
         .route("/api/deep-check", post(media::deep_check))
         .route("/api/cache", get(media::cache_info))
         .route("/api/cache/clear", post(media::cache_clear))

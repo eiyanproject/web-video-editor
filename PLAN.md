@@ -330,9 +330,13 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **Audio waveform** under the preview scrubber, opt-in like the thumbnails and for the
   same reason: drawing it means decoding the whole audio track, which over a share is
   the expensive part. Measured 6.5 s for a 25-minute clip and 56 s for a 2.5-hour one.
-  The result is under 20 kB, so it is cached rather than regenerated — throwing it away
-  would mean paying that read again. It is deliberately on the **preview** player only:
-  the editor has the timeline, and two envelopes competing for attention helps nobody.
+  It is a **switch, not a button**: off means nothing is ever read for it, on means each
+  clip gets one automatically. The read starts only once a selection has settled for a
+  couple of seconds — otherwise clicking down a folder would begin a full read per file
+  passed through. The cache is dropped when the clip is closed, since the envelope
+  belonged to that editing session, with an hourly sweep as a backstop for anything
+  orphaned by a closed tab. Preview player only: the editor has the timeline, and two
+  envelopes competing for attention helps nobody.
 - **Scale slider** on the timeline, as in the reference. Logarithmic — 0 fits the whole
   clip, 100 shows about two seconds — because a linear mapping spends most of its travel
   in a zoom range nobody uses.
@@ -561,6 +565,28 @@ HTML5 `currentTime` seeking is not reliably frame-exact on its own. Solution:
   the exact source frame rate (handles 23.976/29.97 fractional rates without drift).
 
 ### 3.9 Keyboard
+
+The whole flow is reachable without the mouse, following the order the work
+actually happens in: find the film, watch it, take it to the editor, cut, export.
+
+| | |
+|---|---|
+| `F` `↑↓` `Enter` | into the file list, move, open |
+| `/` · `P` | filter this folder · paste a path |
+| `Space` `←→` `,` `.` | play · 5 s · one frame |
+| `L` | load the selected clip into the editor |
+| **`T`** | **move the editor to where the preview is** |
+| `G` then `↑↓` `←→` | timecode box: change the digit, move between digits |
+| `K` | snap to the nearest keyframe |
+| `S` · `[` `]` · `Del` | cut · previous/next segment · keep or drop it |
+| `Ctrl+Z` / `Ctrl+Shift+Z` · `Ctrl+S` | undo / redo · save the cut list |
+| `1` `2` `3` · `Ctrl+Enter` | single / separate / safe join · export |
+| `?` | the list, in the app |
+
+`T` is the one that matters: the workflow is *find the moment in the preview, then
+work on it in the editor*, and that was two panes and a copy-paste. Keys act on the
+player last used, and a focused text box keeps everything except `Esc` and `Enter`.
+
 
 `Space` play/pause · `J`/`K`/`L` shuttle · `←`/`→` jump 5s · `,`/`.` frame step ·
 mouse back button = up a folder ·
