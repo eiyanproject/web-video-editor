@@ -442,12 +442,37 @@ export default function Settings({
       <section className="mb-8">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="font-medium">Library folders</h2>
-          <button
-            onClick={() => setRoots([...roots, { name: '', path: '', writable: false }])}
-            className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
-          >
-            + Add folder
-          </button>
+          <div className="flex gap-2">
+            <button
+              title="Drop folders whose share is not mounted. A renamed or removed share leaves one behind, and it just reads as 'not found' when you browse."
+              onClick={async () => {
+                const checks = await Promise.all(roots.map(async (r) => {
+                  try {
+                    const d = await (await fetch('/api/check-path', {
+                      method: 'POST', headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ path: r.path }),
+                    })).json()
+                    return d.is_dir
+                  } catch { return true }
+                }))
+                const keep = roots.filter((_, i) => checks[i])
+                const dropped = roots.length - keep.length
+                setRoots(keep)
+                setMsg(dropped
+                  ? { kind: 'ok', text: `${dropped} unreachable folder(s) removed — press Save to keep the change.` }
+                  : { kind: 'ok', text: 'Every library folder is reachable.' })
+              }}
+              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+            >
+              Remove unreachable
+            </button>
+            <button
+              onClick={() => setRoots([...roots, { name: '', path: '', writable: false }])}
+              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+            >
+              + Add folder
+            </button>
+          </div>
         </div>
         {roots.map((r, i) => (
           <div key={i} className="mb-2 flex gap-2">

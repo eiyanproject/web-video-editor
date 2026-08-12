@@ -1175,6 +1175,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/sprites", get(media::get_sprites))
         .route("/api/sprites/sheet", get(media::get_sprite_sheet))
         .route("/api/poster", get(media::get_poster))
+        .route("/api/waveform", get(media::get_waveform))
         .route("/api/deep-check", post(media::deep_check))
         .route("/api/cache", get(media::cache_info))
         .route("/api/cache/clear", post(media::cache_clear))

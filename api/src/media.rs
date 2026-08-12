@@ -662,7 +662,10 @@ pub async fn get_poster(
     let _ = tokio::fs::create_dir_all(&dir).await;
     // 10% in avoids black leader and logo cards without a full probe first.
     let out = tokio::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "60"])
+        // -noaccurate_seek lands on the nearest keyframe instead of decoding
+        // forward to an exact timestamp. For a thumbnail the difference is
+        // invisible and it is dramatically cheaper on a 4K file over a share.
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-noaccurate_seek", "-ss", "60"])
         .arg("-i").arg(&p)
         .args(["-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "4"])
         .arg(&file)
@@ -687,6 +690,102 @@ pub async fn get_poster(
          (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
         bytes,
     ).into_response())
+}
+
+// ---------------------------------------------------------------- waveform
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Waveform {
+    /// Peak amplitude per bucket, 0..1.
+    pub peaks: Vec<f32>,
+    pub buckets: usize,
+    pub duration: f64,
+    pub took_ms: u64,
+}
+
+const WAVE_BUCKETS: usize = 1800;
+
+/// Peak envelope of the audio, for spotting silence and scene changes by eye.
+///
+/// Opt-in like the thumbnails, and for the same reason: decoding the audio means
+/// reading the whole file, which over a share is the expensive thing. The result
+/// though is tiny — under 20 kB — so it is cached rather than regenerated, since
+/// throwing it away would mean paying that read again. "Clear cache" removes it
+/// along with everything else.
+pub async fn get_waveform(
+    State(st): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> Result<Json<Waveform>, ApiError> {
+    use tokio::io::AsyncReadExt;
+
+    let (p, dir) = resolve_with_cache(&st, &q.path).await?;
+    let file = dir.join("waveform.json");
+
+    if !q.refresh {
+        if let Ok(s) = tokio::fs::read_to_string(&file).await {
+            if let Ok(v) = serde_json::from_str::<Waveform>(&s) {
+                return Ok(Json(v));
+            }
+        }
+    }
+    if q.peek {
+        return Ok(Json(Waveform::default()));
+    }
+
+    let probe = run_probe(&p).await?;
+    if probe.audio.is_empty() {
+        return Err(ApiError::Bad("this file has no audio".into()));
+    }
+
+    let t0 = std::time::Instant::now();
+    // Mono, 8 kHz, raw 16-bit: enough to draw an envelope, ~2 MB per minute
+    // streamed through a pipe rather than written anywhere.
+    let mut child = tokio::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-v", "error", "-nostdin"])
+        .arg("-i").arg(&p)
+        .args(["-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| ApiError::Internal(format!("cannot run ffmpeg: {e}")))?;
+
+    let mut out = child.stdout.take().ok_or_else(|| ApiError::Internal("no output".into()))?;
+    let total_samples = (probe.duration * 8000.0).max(1.0);
+    let per_bucket = (total_samples / WAVE_BUCKETS as f64).max(1.0);
+
+    let mut peaks = vec![0f32; WAVE_BUCKETS];
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut sample_index = 0f64;
+
+    loop {
+        let n = out.read(&mut buf).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        for chunk in buf[..n].chunks_exact(2) {
+            let v = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+            let b = ((sample_index / per_bucket) as usize).min(WAVE_BUCKETS - 1);
+            let a = v.abs();
+            if a > peaks[b] {
+                peaks[b] = a;
+            }
+            sample_index += 1.0;
+        }
+    }
+    let _ = child.wait().await;
+
+    let wf = Waveform {
+        buckets: WAVE_BUCKETS,
+        duration: probe.duration,
+        took_ms: t0.elapsed().as_millis() as u64,
+        peaks,
+    };
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    if let Ok(j) = serde_json::to_string(&wf) {
+        let _ = tokio::fs::write(&file, j).await;
+    }
+    tracing::info!("waveform for {} in {:.1}s", p.display(), t0.elapsed().as_secs_f64());
+    Ok(Json(wf))
 }
 
 // ---------------------------------------------------------------- deep check

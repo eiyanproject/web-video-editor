@@ -473,9 +473,17 @@ async fn run_smart_cut(
                 // internally consistent; copied pieces are untouched, so this is
                 // still a couple of seconds of audio per cut, not a re-encode.
                 if probe.audio.first().map(|a| a.codec == "aac").unwrap_or(false) {
+                    // Match the source rather than assuming: a hardcoded rate
+                    // either throws away quality on a good source or wastes
+                    // bits on a modest one. Only these few seconds are affected.
+                    let kbps = if probe.bit_rate > 0 {
+                        ((probe.bit_rate as f64 * 0.12) / 1000.0).round().clamp(96.0, 320.0) as u32
+                    } else {
+                        192
+                    };
                     v.extend([
                         "-c:a".into(), "aac".into(),
-                        "-b:a".into(), "192k".into(),
+                        "-b:a".into(), format!("{kbps}k"),
                     ]);
                 } else {
                     v.extend(["-c:a".into(), "copy".into()]);
@@ -545,6 +553,65 @@ async fn run_smart_cut(
         .map_err(|_| format!("cannot finalise {}", target.display()))?;
 
     Ok((total, pieces.iter().filter(|p| matches!(p, Piece::Encode { .. })).count()))
+}
+
+/// Concatenates finished output files into one.
+///
+/// Used by "safe join" in both cutting modes. Joining complete, independently
+/// valid files is more forgiving than asking the muxer to stitch across
+/// discontinuities in a single pass.
+async fn join_finished_files(
+    jobs: &Jobs,
+    id: &str,
+    outdir: &Path,
+    stem: &str,
+    ext: &str,
+    parts: &[String],
+    overwrite: bool,
+    total: f64,
+) -> Result<String, String> {
+    let joined = outdir.join(format!("{stem}_joined.{ext}"));
+    if joined.exists() && !overwrite {
+        return Err(format!("{} already exists", joined.display()));
+    }
+    let list = outdir.join(format!(".{stem}.join.txt"));
+    let body: String = parts
+        .iter()
+        .map(|o| format!("file '{}'\n", o.replace('\'', "'\\''")))
+        .collect();
+    tokio::fs::write(&list, body)
+        .await
+        .map_err(|e| format!("cannot write the join list: {e}"))?;
+
+    let part = joined.with_extension(format!("{ext}.part"));
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+        "-fflags".into(), "+genpts".into(),
+        "-f".into(), "concat".into(), "-safe".into(), "0".into(),
+        "-i".into(), list.to_string_lossy().to_string(),
+        "-c".into(), "copy".into(),
+        "-avoid_negative_ts".into(), "make_zero".into(),
+        "-max_interleave_delta".into(), "0".into(),
+        "-muxdelay".into(), "0".into(), "-muxpreload".into(), "0".into(),
+    ];
+    if matches!(ext, "mp4" | "m4v" | "mov") {
+        args.push("-movflags".into());
+        args.push("+faststart".into());
+    }
+    args.push("-f".into()); args.push(muxer_for(ext).into());
+    args.push("-progress".into()); args.push("pipe:1".into());
+    args.push("-nostats".into());
+    args.push(part.to_string_lossy().to_string());
+
+    let r = run_ffmpeg(jobs, id, args, 0.9, 0.1, total).await;
+    let _ = tokio::fs::remove_file(&list).await;
+    match r {
+        Err(e) => { let _ = tokio::fs::remove_file(&part).await; Err(e) }
+        Ok(()) => tokio::fs::rename(&part, &joined)
+            .await
+            .map(|_| joined.to_string_lossy().to_string())
+            .map_err(|_| format!("cannot finalise {}", joined.display())),
+    }
 }
 
 // ---------------------------------------------------------------- the job
@@ -654,10 +721,7 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
 
     let mut outputs: Vec<String> = Vec::new();
 
-    let result: Result<(), String> = if exact_ok && req.mode != "separate" {
-        // Frame-exact, joined. Separate-file output keeps the snap path for now:
-        // each file would need its own TS pipeline, which is Phase 4 follow-up
-        // work rather than something to half-do here.
+    let result: Result<(), String> = if exact_ok && req.mode == "merge" {
         let target = outdir.join(format!("{stem}_cut.{ext}"));
         if target.exists() && !req.overwrite {
             Err(format!("{} already exists", target.display()))
@@ -675,6 +739,44 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
                 }
             }
         }
+    } else if exact_ok {
+        // Frame-exact, one file per segment. Each gets its own TS pipeline, so
+        // separate output is no longer stuck with keyframe-snapped starts.
+        let mut acc = Ok(());
+        for (i, seg) in segs.iter().enumerate() {
+            let target = outdir.join(format!("{stem}_seg{:02}.{ext}", i + 1));
+            if target.exists() && !req.overwrite {
+                acc = Err(format!("{} already exists", target.display()));
+                break;
+            }
+            let tmp = outdir.join(format!(".{stem}.smartcut{i}"));
+            let one = [*seg];
+            match run_smart_cut(&st, &jobs, &id, &src, &probe, &one, &kf, &tmp, &target, &ext).await {
+                Ok(_) => outputs.push(target.to_string_lossy().to_string()),
+                Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&tmp).await;
+                    acc = Err(e);
+                    break;
+                }
+            }
+        }
+
+        // Safe join keeps its meaning under frame-exact: build complete files,
+        // then join those. Otherwise the two buttons would quietly do the same
+        // thing whenever exact cutting was on.
+        if acc.is_ok() && req.mode == "separate_merge" && outputs.len() > 1 {
+            match join_finished_files(&jobs, &id, &outdir, &stem, &ext, &outputs, req.overwrite, total).await {
+                Ok(joined) => {
+                    for f in &outputs {
+                        let _ = tokio::fs::remove_file(f).await;
+                    }
+                    outputs.clear();
+                    outputs.push(joined);
+                }
+                Err(e) => acc = Err(e),
+            }
+        }
+        acc
     } else if req.mode == "separate" || req.mode == "separate_merge" {
         let mut acc = Ok(());
         for (i, (a, b)) in segs.iter().enumerate() {

@@ -205,6 +205,8 @@ export default function App() {
   const [deep, setDeep] = useState<{ ok: boolean; errors: string[]; took_ms: number } | null>(null)
   const [deepBusy, setDeepBusy] = useState(false)
   const [indexing, setIndexing] = useState(false)
+  const [peaks, setPeaks] = useState<number[] | undefined>(undefined)
+  const [waveBusy, setWaveBusy] = useState(false)
 
   // ---- Phase 2: the edit ---------------------------------------------------
 
@@ -402,8 +404,13 @@ export default function App() {
   // SELECTING a file is metadata-only. ffprobe reads headers, not the file, so
   // browsing a folder of fifty clips costs nothing.
   useEffect(() => {
-    setProbe(null); setDeep(null)
+    setProbe(null); setDeep(null); setPeaks(undefined)
     if (!selected || selected.is_dir) return
+    // Cache-only: never starts a scan just because a file was clicked.
+    fetch(`/api/waveform?peek=true&path=${encodeURIComponent(selected.abs)}`)
+      .then((r) => r.json())
+      .then((d) => { if (d?.peaks?.length) setPeaks(d.peaks) })
+      .catch(() => {})
     let cancelled = false
     ;(async () => {
       setAnalyzing(true)
@@ -528,6 +535,21 @@ export default function App() {
   useEffect(() => {
     if (showPaste) pasteRef.current?.focus()
   }, [showPaste])
+
+  const buildWaveform = async () => {
+    if (!selected) return
+    setWaveBusy(true)
+    say('Reading audio…')
+    try {
+      const r = await fetch(`/api/waveform?path=${encodeURIComponent(selected.abs)}`)
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setPeaks(d.peaks)
+      say(`Waveform ready (${(d.took_ms / 1000).toFixed(1)}s)`)
+    } catch (e: any) {
+      setError(String(e.message ?? e))
+    } finally { setWaveBusy(false) }
+  }
 
   const rebuildThumbs = async () => {
     if (!selected) return
@@ -1114,6 +1136,7 @@ export default function App() {
               // thing you are previewing is the thing you are editing.
               keyframes={loaded?.abs === selected.abs ? keyframes : []}
               sprites={loaded?.abs === selected.abs ? sprites : null}
+              peaks={peaks}
               indexing={indexing && loaded?.abs === selected.abs}
               loadedForEditing={loaded?.abs === selected.abs}
               onSeek={(t) => { if (videoRef.current) { videoRef.current.currentTime = t; setCurTime(t) } }}
@@ -1157,6 +1180,11 @@ export default function App() {
               title="Generate hover thumbnails for this file. Reads the entire file once, so it is slow over a network share — do it for files you are actually editing."
               disabled={!selected} onClick={rebuildThumbs}>
               {sprites?.done ? '⟳ Thumbs' : '🖼 Thumbs'}
+            </Btn>
+            <Btn
+              title="Draw the audio envelope on the scrub bar. Reads the file once (a few seconds), then caches about 20 kB."
+              disabled={!selected || waveBusy} onClick={buildWaveform}>
+              {waveBusy ? '…' : peaks?.length ? '⟳ Wave' : '〜 Wave'}
             </Btn>
             <div className="flex-1" />
             <Btn title="Copy the selected file's path" disabled={!selected} onClick={() => copy(selected!.abs, 'Path')}>⧉ Path</Btn>

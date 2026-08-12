@@ -27,7 +27,7 @@ const fmt = (t: number) => {
 
 export default function Scrubber({
   path, duration, current, keyframes, sprites, onSeek,
-  indexing = false, loadedForEditing = false,
+  indexing = false, loadedForEditing = false, peaks,
 }: {
   path: string
   duration: number
@@ -37,8 +37,11 @@ export default function Scrubber({
   onSeek: (t: number) => void
   indexing?: boolean
   loadedForEditing?: boolean
+  /// Peak envelope, 0..1 per bucket. Undefined until generated on request.
+  peaks?: number[]
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
+  const waveRef = useRef<HTMLCanvasElement>(null)
   const [hoverT, setHoverT] = useState<number | null>(null)
   const [hoverX, setHoverX] = useState(0)
   const [width, setWidth] = useState(0)
@@ -51,6 +54,27 @@ export default function Scrubber({
     setWidth(el.clientWidth)
     return () => ro.disconnect()
   }, [])
+
+  // Drawn on a canvas rather than 1800 DOM nodes: it is a picture, and it has
+  // to redraw on every resize.
+  useEffect(() => {
+    const c = waveRef.current
+    if (!c || !peaks?.length || !width) return
+    const dpr = window.devicePixelRatio || 1
+    const h = c.clientHeight || 40
+    c.width = width * dpr
+    c.height = h * dpr
+    const g = c.getContext('2d')!
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    g.clearRect(0, 0, width, h)
+    g.fillStyle = 'rgba(148,163,184,0.35)'
+    const mid = h / 2
+    const step = width / peaks.length
+    for (let i = 0; i < peaks.length; i++) {
+      const a = Math.min(1, peaks[i] * 1.6) * (h / 2 - 1)
+      g.fillRect(i * step, mid - a, Math.max(1, step), a * 2)
+    }
+  }, [peaks, width])
 
   const timeAt = (clientX: number) => {
     const el = trackRef.current
@@ -103,8 +127,12 @@ export default function Scrubber({
         onMouseMove={(e) => { setHoverT(timeAt(e.clientX)); setHoverX(e.clientX) }}
         onMouseLeave={() => setHoverT(null)}
         onClick={(e) => onSeek(timeAt(e.clientX))}
-        className="relative h-10 cursor-pointer rounded bg-white/10"
+        className="relative h-10 cursor-pointer overflow-hidden rounded bg-white/10"
       >
+        {/* Audio envelope: silence and scene changes are visible at a glance. */}
+        {!!peaks?.length && (
+          <canvas ref={waveRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+        )}
         {/* keyframe ticks: where a lossless cut may land. Full height, because
             without thumbnails this bar's job is showing cut geometry. */}
         {ticks.map((t, i) => (
@@ -184,6 +212,7 @@ export default function Scrubber({
           </span>
         )}
         {sprites?.error && <span className="text-red-300/80">thumbnails failed</span>}
+        {!!peaks?.length && <span className="text-white/25">waveform</span>}
         {!sprites && (
           <span className="text-white/25">
             hover for time · thumbnails off (reads the whole file — use the Thumbs button)

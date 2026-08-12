@@ -327,6 +327,12 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **Draggable split** between player and segment list, with detents at 25 / 50 / 75%.
   Dragging to a round split is the common intent and hitting it by hand is fiddly, so
   the handle snaps within 3%. Double-click resets to 75/25. The position persists.
+- **Audio waveform** under the preview scrubber, opt-in like the thumbnails and for the
+  same reason: drawing it means decoding the whole audio track, which over a share is
+  the expensive part. Measured 6.5 s for a 25-minute clip and 56 s for a 2.5-hour one.
+  The result is under 20 kB, so it is cached rather than regenerated — throwing it away
+  would mean paying that read again. It is deliberately on the **preview** player only:
+  the editor has the timeline, and two envelopes competing for attention helps nobody.
 - **Scale slider** on the timeline, as in the reference. Logarithmic — 0 fits the whole
   clip, 100 shows about two seconds — because a linear mapping spends most of its travel
   in a zoom range nobody uses.
@@ -751,7 +757,7 @@ allow, documented in the setup guide alongside a verification command
 | **2** | ✅ Segment model, split/delete/undelete, zoomable canvas timeline with keyframe ticks, frame stepping, undo/redo, drag and drop, per-cut cost badges | The left pane is usable, nothing exports yet |
 | **3** | Export engine v1: keyframe-snap copy path, merge + separate modes, **remux / container conversion incl. MPEG-TS → MP4 (§2.7)**, job queue, SSE progress, output verification | **First genuinely useful build.** Fully lossless, cuts snap to keyframes |
 | **4** | Smart-cut: boundary fragment encoder, parameter matching, Tier 1 concat, Tier 2 fallback, per-cut cost badges | Frame-exact cuts. The headline feature |
-| **5** | Polish: MKV preview remux cache, HLS preview for incompatible codecs, audio waveform, batch queue, export presets, keyboard shortcuts, theming pass | |
+| **5** | ✅ Audio waveform (opt-in, ~20 kB cached), frame-exact for separate files and safe join, derived audio bitrate, faster posters, unreachable-folder cleanup. Remaining: HLS preview for HEVC/AC3, export presets | |
 
 Phase 3 is the point where this replaces Movavi for the actual job. Phase 4 is what
 makes it better than the free alternatives.
