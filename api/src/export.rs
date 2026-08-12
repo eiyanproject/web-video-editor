@@ -463,6 +463,28 @@ async fn run_smart_cut(
                 if probe.fps > 0.0 {
                     v.extend(["-r".into(), format!("{:.6}", probe.fps)]);
                 }
+                // Pixel aspect must be carried onto the rebuilt fragment.
+                //
+                // Plenty of real files have non-square pixels: 854x480 stored
+                // with a 1280:1281 sample aspect to display as 16:9 is common,
+                // and phone footage is often flagged rather than stored square.
+                // A fragment encoded at the default 1:1 is a different shape
+                // from the copied pieces either side of it, and the finished
+                // file takes the aspect of whichever piece happens to come
+                // first - so a cut starting mid-GOP came out subtly stretched.
+                //
+                // `-aspect` rather than `-vf setsar`: the filter sets the frame
+                // property but does not reach the encoder's VUI, so the flag was
+                // silently doing nothing. Measured, not assumed.
+                if let Some((num, den)) = probe.sar.split_once(':') {
+                    if let (Ok(n), Ok(d)) = (num.parse::<u64>(), den.parse::<u64>()) {
+                        if n > 0 && d > 0 && n != d && probe.width > 0 && probe.height > 0 {
+                            let dar_w = probe.width as u64 * n;
+                            let dar_h = probe.height as u64 * d;
+                            v.extend(["-aspect".into(), format!("{dar_w}/{dar_h}")]);
+                        }
+                    }
+                }
                 // Audio is re-encoded in rebuilt fragments, not copied.
                 //
                 // A fragment's video is regenerated and starts at zero, but

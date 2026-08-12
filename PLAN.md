@@ -312,9 +312,18 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
   the right quarter, timeline spanning the bottom, export strip beneath it. The preview
   is deliberately modest — the timeline and the segment list are what you look at while
   cutting.
-- **No letterbox.** The player's height follows the video's own aspect rather than
-  sitting in a fixed box, so there are no black bars padding the controls downward. On a
-  16:9 source the container is exactly the picture; a 4:3 clip simply makes it taller.
+- **No letterbox, and the shape is always the real one.** Both players size themselves
+  from the clip's *display* aspect, which is not width over height: a 854x480 file with a
+  1280:1281 sample aspect displays as 16:9, and phone footage is often flagged rather than
+  stored square. Landscape clips are width-led; portrait clips are height-led and capped,
+  so a vertical video does not run the length of the pane and shove everything off screen.
+  Thumbnails use `contain`, never `cover` - cropping a portrait clip into a 16:9 tile
+  hides most of the picture it exists to identify.
+- **Rebuilt fragments carry the source's pixel aspect.** A fragment encoded at the default
+  1:1 is a different shape from the copied pieces either side of it, and the finished file
+  takes the aspect of whichever piece comes first - so a cut starting mid-GOP came out
+  subtly stretched. `-aspect` does this; `-vf setsar` sets the frame property but never
+  reaches the encoder's VUI, so it was silently doing nothing. Measured, not assumed.
 - **The segment list never sets the row height.** It is given exactly the picture's
   height, measured, and scrolls vertically within it. Letting the list size the row is
   what pushed the timeline off the bottom of the screen once a handful of cuts existed —

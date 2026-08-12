@@ -112,6 +112,23 @@ const fmtTimecode = (t: number) => {
   return `${p(h)}:${p(m)}:${p(s)}.${p(ms, 3)}`
 }
 
+/**
+ * Display aspect of a clip, honouring non-square pixels.
+ *
+ * Stored width over height is not the shape you see: a 854x480 file with a
+ * 1280:1281 sample aspect displays as 16:9. Portrait phone footage is the case
+ * that makes this visible - forcing everything into a 16:9 box would show it as
+ * a sliver between two black slabs.
+ */
+function displayAspect(p: { width: number; height: number; sar?: string } | null): number | null {
+  if (!p?.width || !p?.height) return null
+  let num = 1, den = 1
+  const m = (p.sar ?? '').match(/^(\d+):(\d+)$/)
+  if (m) { num = Number(m[1]); den = Number(m[2]) }
+  if (!num || !den) { num = 1; den = 1 }
+  return (p.width * num) / (p.height * den)
+}
+
 function describeMediaError(v: HTMLVideoElement): string {
   const e = v.error
   if (!e) return 'Playback failed for an unknown reason.'
@@ -1188,7 +1205,11 @@ export default function App() {
                         src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
                         controls
                         preload="metadata"
-                        className="block h-auto w-full"
+                        className={
+                          (displayAspect(loadedProbe) ?? 2) < 1
+                            ? 'mx-auto block max-h-[52vh] w-auto'
+                            : 'block h-auto w-full'
+                        }
                         onLoadedMetadata={() => {
                           const v = editVideoRef.current
                           const t = pendingEditSeek.current
@@ -1409,7 +1430,16 @@ export default function App() {
           {/* Fully independent of the editor's player, including when it is the
               same file: browsing and cutting are different jobs with different
               playheads, and sharing one element makes both worse. */}
-          <div className="aspect-video w-full bg-black">
+          <div
+            className="mx-auto w-full bg-black"
+            style={{
+              aspectRatio: String(displayAspect(probe) ?? 16 / 9),
+              // Portrait clips would otherwise run the full height of the pane
+              // and shove the file list off the screen.
+              maxHeight: '52vh',
+              width: (displayAspect(probe) ?? 2) < 1 ? 'auto' : '100%',
+            }}
+          >
             {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"

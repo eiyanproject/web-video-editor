@@ -25,13 +25,40 @@ The timeline also draws **keyframe tick marks**, and each cut point is labelled 
 
 ## Status
 
-**Phase 4 complete.** End to end: browse an SMB share, cut a clip on a zoomable timeline
-with keyframe ticks, drop what you don't want, and export — merged or as separate files,
-optionally into a different container — as a pure stream copy. Cut lists are saved back
-to the share so reopening a clip brings its cuts with it.
+**Phases 0-5 complete.** Browse an SMB share, cut a clip on a zoomable timeline with
+keyframe ticks, drop what you don't want, and export - merged, separate, or joined the
+safe way - with cuts landing exactly where you put them and only the second or two
+around each one re-encoded. Cut lists are saved back to the share, so reopening a film
+brings its cuts with it.
 
 | Phase | State |
 |---|---|
+| 0 · scaffolding, library browser, range playback, SMB settings, logs | ✅ |
+| 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ |
+| 2 · segment model, canvas timeline, frame stepping, drag & drop | ✅ |
+| 3 · export engine, container remux, saved cut lists | ✅ |
+| 4 · smart-cut, frame-exact | ✅ |
+| 5 · waveform, batch remux, folder pickers, keyboard flow | ✅ |
+
+Remaining ideas: HLS preview for codecs browsers refuse (HEVC, AC3), export presets.
+Neither affects MP4 work, which is the well-supported path throughout.
+
+## What it does
+
+- **Frame-exact cuts.** Only the partial GOP at each boundary is rebuilt - measured at
+  7.3 s of a 119 s export, 6% - and everything else is copied byte for byte. Turn it off
+  and cuts snap to keyframes instead, for a pure copy.
+- **Every cut is priced before you commit**: `lossless` if it lands on a keyframe, or
+  `exact · re-encodes 1.8s` if not.
+- **Three export shapes**: one joined file, one file per segment, or "safe join" - which
+  writes complete files and joins those, for when a single-pass join comes out wrong.
+- **Container remux** (MP4 ↔ MKV ↔ TS ↔ MOV), including in bulk from the Batch tab.
+- **Saved cut lists** on the share, one small file per clip, restored automatically.
+- **Aspect ratio is preserved everywhere**, including non-square pixels and portrait
+  phone footage - in both players, in thumbnails, and through a rebuilt fragment.
+- **The whole flow works from the keyboard.** Press `?` in the app.
+
+---|---|
 | 0 · scaffolding, library browser, range playback, SMB settings, logs | ✅ done |
 | 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ done |
 | 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | ✅ done |
@@ -179,6 +206,8 @@ GET  /api/sprites/sheet?path=&n= one sprite sheet
 POST /api/deep-check             decode the first and last 20s for corruption
 GET  /api/cache                  analysis cache size
 POST /api/cache/clear
+GET  /api/poster?path=           one representative frame, cached
+GET  /api/waveform?path=         audio peak envelope; DELETE drops it
 
 GET  /api/edit?path=             saved cut list for a clip
 POST /api/edit                   save one (write-then-rename)

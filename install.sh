@@ -3,8 +3,8 @@
 # Web Video Editor - installer and updater.
 #
 # The same script does both. Run it once to install; run it again to update.
-# Updating pulls the latest code, rebuilds and restarts. Your settings, shares
-# and stored credentials live in ./config and are never touched.
+# Updating pulls the latest code, rebuilds and restarts. Your settings, shares,
+# stored credentials and saved cut lists are never touched.
 #
 #   curl -fsSL https://raw.githubusercontent.com/eiyanproject/web-video-editor/main/install.sh | bash
 #   ./install.sh --port 9000
@@ -82,6 +82,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
   (cd "$DIR" && $DC down) || true
   ok "containers stopped and removed"
   warn "kept your settings at $DIR/config - delete it by hand if you want them gone"
+  warn "kept the analysis cache at $DIR/cache - safe to delete, it rebuilds itself"
+  warn "saved cut lists are wherever you pointed them, usually on the share, and are untouched"
   exit 0
 fi
 
@@ -110,15 +112,28 @@ fi
 cd "$DIR"
 
 # ---------------------------------------------------------------- config
-# config/ holds settings.json with SMB credentials. It is gitignored and must
-# survive every update - this is the whole reason updates are safe to re-run.
-mkdir -p config
+# Both bind mounts must exist before compose starts, or Docker creates them
+# owned by root and the container cannot write to them - which shows up much
+# later as a baffling permission error on an export.
+#
+# config/ holds settings.json with SMB credentials and must survive every
+# update; that is the whole reason re-running this is safe. cache/ holds
+# analysis results (probe, keyframe index, thumbnails) and is regenerable, so
+# losing it costs time rather than data.
+mkdir -p config cache
 chmod 700 config 2>/dev/null || true
 if [ -f config/settings.json ]; then
   ok "existing settings preserved ($(wc -c < config/settings.json) bytes)"
 else
   ok "fresh install - no settings yet, you will be prompted in the UI"
 fi
+CACHE_SIZE="$(du -sh cache 2>/dev/null | cut -f1)"
+[ -n "$CACHE_SIZE" ] && ok "analysis cache: $CACHE_SIZE"
+
+# Saved cut lists live wherever you pointed them - usually on the share, so
+# they travel with the media rather than with this install.
+EDITS_DIR="$(sed -n 's/.*"edits_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' config/settings.json 2>/dev/null | head -1)"
+[ -n "$EDITS_DIR" ] && ok "saved cut lists: $EDITS_DIR (untouched)"
 
 if [ -n "$PORT" ]; then
   if grep -q '^PORT=' .env 2>/dev/null; then
@@ -157,9 +172,11 @@ printf '%sWeb Video Editor is running.%s\n\n' "$c_g$c_b" "$c_0"
 printf '   http://%s:%s\n\n' "$IP" "$EFF_PORT"
 echo "   Installed at : $DIR"
 echo "   Settings     : $DIR/config/settings.json (0600, keep it private)"
+echo "   Cache        : $DIR/cache (analysis results, safe to delete)"
 echo "   Update       : re-run this script"
-echo "   Logs         : $DC logs -f api"
+echo "   Logs         : $DC logs -f api, or the Log page in the app"
 echo
 echo "It starts with no storage configured. Open the page and connect a network"
-echo "share - the empty state walks you through it."
+echo "share - the empty state walks you through it. Press ? in the app for the"
+echo "keyboard shortcuts."
 echo

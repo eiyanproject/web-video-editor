@@ -176,7 +176,9 @@ export default function Batch({ onClose }: { onClose: () => void }) {
                     src={`/api/poster?path=${encodeURIComponent(v.abs)}`}
                     alt=""
                     loading="lazy"
-                    className="h-full w-full object-cover"
+                    // contain, not cover: cropping a portrait clip into a 16:9
+                    // tile hides most of the picture it is meant to identify.
+                    className="h-full w-full object-contain"
                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
                   />
                   {on && (
