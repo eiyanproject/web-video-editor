@@ -190,6 +190,9 @@ export default function App() {
   const [pasted, setPasted] = useState('')
   const [showPaste, setShowPaste] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  // Which pane the keyboard is driving. Kept in state, not just a ref,
+  // because an invisible mode is a trap - the panes show which one is live.
+  const [activePane, setActivePane] = useState<'editor' | 'preview'>('editor')
   // Export mode lives here so a keystroke can set it and the panel follows.
   const [exportMode, setExportMode] = useState<'merge' | 'separate' | 'separate_merge'>('merge')
   const listRef = useRef<HTMLDivElement>(null)
@@ -532,10 +535,21 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
-      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return
-      // Keys follow whichever player you last touched. Always driving the
-      // editor meant scrubbing the wrong picture whenever you were previewing
-      // something in the library pane.
+      const typing = !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)
+
+      // Tab moves between the two panes. Taken even when a file row has focus,
+      // but never inside a text field, so forms still tab normally.
+      if (e.key === 'Tab' && !typing) {
+        e.preventDefault()
+        const next = lastPlayerRef.current === 'editor' ? 'preview' : 'editor'
+        lastPlayerRef.current = next
+        setActivePane(next)
+        const target = next === 'editor' ? editVideoRef.current : videoRef.current
+        target?.focus?.()
+        return
+      }
+      if (typing) return
+
       const wantEditor = lastPlayerRef.current !== 'preview'
       const v = (wantEditor ? editVideoRef.current : videoRef.current)
         ?? editVideoRef.current ?? videoRef.current
@@ -552,49 +566,59 @@ export default function App() {
         isEditor ? setEditTime(t) : setCurTime(t)
       }
 
+      // Only keys the browser would otherwise act on get cancelled. A plain
+      // letter has no default worth taking, so those are left alone and every
+      // browser shortcut, extension and accessibility tool keeps working.
       const take = () => { e.preventDefault(); e.stopPropagation() }
 
-      // Ctrl/Cmd combinations first, so plain letters stay free.
       if (e.ctrlKey || e.metaKey) {
+        // Ctrl + arrows: one second, for placing a cut without hunting.
+        if (e.key === 'ArrowRight') { take(); return jump(1) }
+        if (e.key === 'ArrowLeft') { take(); return jump(-1) }
         switch (e.key.toLowerCase()) {
           case 'z': take(); e.shiftKey ? redoRef.current?.() : undoRef.current?.(); return
-          case 's': take(); saveEditRef.current?.(); return
-          case 'enter': take(); exportRef.current?.(); return
+          case 's': take(); saveEditRef.current?.(); return   // browser save
+          case 'enter': exportRef.current?.(); return
         }
         return
       }
+      if (e.altKey) return   // leave browser navigation alone
 
       switch (e.key) {
-        case 'ArrowRight': return jump(5)
-        case 'ArrowLeft': return jump(-5)
+        case 'ArrowRight': take(); return jump(5)
+        case 'ArrowLeft': take(); return jump(-5)
         case '.': return jump(frame)
         case ',': return jump(-frame)
         case ' ':
-          take(); v.paused ? v.play().catch(() => {}) : v.pause(); return
+          take()   // stops the page scrolling
+          v.paused ? v.play().catch(() => {}) : v.pause(); return
 
         // --- moving around ---
-        case 'f': case 'F': take(); focusListRef.current?.(); return
-        case '/': take(); focusFilterRef.current?.(); return
-        case 'p': case 'P': take(); openPasteRef.current?.(); return
-        case 'l': case 'L': take(); loadIntoEditorRef.current?.(); return
+        case 'f': case 'F': focusListRef.current?.(); return
+        case '/': take(); focusFilterRef.current?.(); return   // Firefox quick-find
+        case 'p': case 'P': openPasteRef.current?.(); return
+        case 'l': case 'L': loadIntoEditorRef.current?.(); return
 
         // --- carrying a time from the preview into the editor ---
-        case 't': case 'T': take(); transferTimeRef.current?.(); return
-        case 'g': case 'G': take(); focusTimecodeRef.current?.(); return
-        case 'k': case 'K': take(); snapKeyframeRef.current?.(); return
+        case 't': case 'T': transferTimeRef.current?.(); return
+        case 'g': case 'G': focusTimecodeRef.current?.(); return
+        case 'k': case 'K': snapKeyframeRef.current?.(); return
 
         // --- cutting ---
-        case 's': case 'S': take(); splitRef.current?.(); return
-        case 'Delete': case 'Backspace': take(); toggleRef.current?.(); return
-        case '[': take(); stepSegmentRef.current?.(-1); return
-        case ']': take(); stepSegmentRef.current?.(1); return
+        // X for cut, as in cut-and-paste everywhere else. S still works, since
+        // that is what video editors tend to use for split.
+        case 'x': case 'X': case 's': case 'S': splitRef.current?.(); return
+        case 'Delete': toggleRef.current?.(); return
+        case 'Backspace': take(); toggleRef.current?.(); return  // used to go back
+        case '[': stepSegmentRef.current?.(-1); return
+        case ']': stepSegmentRef.current?.(1); return
 
         // --- export mode, then go ---
-        case '1': take(); setExportMode('merge'); say('Export: single file'); return
-        case '2': take(); setExportMode('separate'); say('Export: separate files'); return
-        case '3': take(); setExportMode('separate_merge'); say('Export: safe join'); return
+        case '1': setExportMode('merge'); say('Export: single file'); return
+        case '2': setExportMode('separate'); say('Export: separate files'); return
+        case '3': setExportMode('separate_merge'); say('Export: safe join'); return
 
-        case '?': take(); setShowHelp((h) => !h); return
+        case '?': setShowHelp((h) => !h); return
         case 'Escape': setShowHelp(false); return
       }
     }
@@ -945,8 +969,10 @@ export default function App() {
                   ['P', 'paste a path'],
                 ]],
                 ['Watch it', [
+                  ['Tab', 'switch pane — the lit edge shows which'],
                   ['Space', 'play / pause'],
                   ['← →', 'jump 5 seconds'],
+                  ['Ctrl+← →', 'one second'],
                   [', .', 'one frame'],
                 ]],
                 ['Take it to the editor', [
@@ -958,7 +984,7 @@ export default function App() {
                   ['K', 'snap to the nearest keyframe'],
                 ]],
                 ['Cut', [
-                  ['S', 'cut at the playhead'],
+                  ['X or S', 'cut at the playhead'],
                   ['[ ]', 'previous / next segment'],
                   ['Del', 'keep or drop that segment'],
                   ['Ctrl+Z', 'undo · Shift to redo'],
@@ -1000,7 +1026,10 @@ export default function App() {
       )}
       <div ref={mainRowRef} className="flex min-h-0 flex-1">
         {/* ---------------- left: editor ------------------------------- */}
-        <div className="flex min-w-0 flex-col" style={{ width: `${mainSplit * 100}%` }}>
+        {/* A thin bar marks which pane the keyboard is driving. Tab switches. */}
+        <div className={`flex min-w-0 flex-col border-t-2 ${
+          activePane === 'editor' ? 'border-indigo-400/70' : 'border-transparent'
+        }`} style={{ width: `${mainSplit * 100}%` }}>
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
             <button className="rounded bg-indigo-500/80 px-3 py-1 font-medium text-white">Trim</button>
             <button onClick={() => setPage('batch')}
@@ -1069,9 +1098,9 @@ export default function App() {
                           }
                           pendingEditSeek.current = null
                         }}
-                        onPlay={() => { lastPlayerRef.current = 'editor' }}
-                        onClick={() => { lastPlayerRef.current = 'editor' }}
-                        onSeeking={() => { lastPlayerRef.current = 'editor' }}
+                        onPlay={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
+                        onClick={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
+                        onSeeking={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
                         onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                         onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                       />
@@ -1223,7 +1252,9 @@ export default function App() {
         />
 
         {/* ---------------- right: library + player -------------------- */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className={`flex min-w-0 flex-1 flex-col border-t-2 ${
+          activePane === 'preview' ? 'border-indigo-400/70' : 'border-transparent'
+        }`}>
           {/* One navigation row: actions and location together, because they are
               the same concern. The path scrolls horizontally rather than
               wrapping, so the row never grows and steals height from the player. */}
@@ -1281,9 +1312,9 @@ export default function App() {
             {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
-                onPlay={() => { lastPlayerRef.current = 'preview' }}
-                onClick={() => { lastPlayerRef.current = 'preview' }}
-                onSeeking={() => { lastPlayerRef.current = 'preview' }}
+                onPlay={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
+                onClick={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
+                onSeeking={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
                 onLoadedMetadata={() => {
                   setPlayError(null)
                   const v = videoRef.current

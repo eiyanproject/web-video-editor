@@ -573,15 +573,20 @@ actually happens in: find the film, watch it, take it to the editor, cut, export
 |---|---|
 | `F` `↑↓` `Enter` | into the file list, move, open |
 | `/` · `P` | filter this folder · paste a path |
-| `Space` `←→` `,` `.` | play · 5 s · one frame |
+| `Tab` | switch pane — a lit edge shows which one keys drive |
+| `Space` `←→` `Ctrl+←→` `,` `.` | play · 5 s · 1 s · one frame |
 | `L` | load the selected clip into the editor |
 | **`T`** | **move the editor to where the preview is** |
 | `G` then `↑↓` `←→` | timecode box: change the digit, move between digits |
 | `K` | snap to the nearest keyframe |
-| `S` · `[` `]` · `Del` | cut · previous/next segment · keep or drop it |
+| `X` or `S` · `[` `]` · `Del` | cut · previous/next segment · keep or drop it |
 | `Ctrl+Z` / `Ctrl+Shift+Z` · `Ctrl+S` | undo / redo · save the cut list |
 | `1` `2` `3` · `Ctrl+Enter` | single / separate / safe join · export |
 | `?` | the list, in the app |
+
+Only keys with a real browser default are cancelled — Space, the arrows, `/`,
+`Ctrl+S`, Backspace, Tab. Plain letters are left alone, so browser shortcuts,
+extensions and accessibility tools keep working. Alt is never touched.
 
 `T` is the one that matters: the workflow is *find the moment in the preview, then
 work on it in the editor*, and that was two panes and a copy-paste. Keys act on the
