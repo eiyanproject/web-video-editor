@@ -22,6 +22,8 @@ type SettingsData = {
   smb: SmbPublic[]
   allow_any_path: boolean
   output_dir: string
+  edits_dir: string
+  autosave_edits: boolean
   default_username: string
   default_domain: string
   has_default_password: boolean
@@ -69,9 +71,25 @@ export default function Settings({
   const [hasDefPass, setHasDefPass] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [pathCheck, setPathCheck] = useState<
-    { exists: boolean; is_dir: boolean; writable: boolean; on_mount: boolean; message: string } | null
-  >(null)
+  type PathCheck = { exists: boolean; is_dir: boolean; writable: boolean; on_mount: boolean; message: string }
+  const [pathCheck, setPathCheck] = useState<PathCheck | null>(null)
+  const [editsDir, setEditsDir] = useState('')
+  const [autosaveEdits, setAutosaveEdits] = useState(true)
+  const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
+  const [savedEdits, setSavedEdits] = useState<
+    { source: string; name: string; segments: number; kept: number; saved_at: number; exists: boolean }[]
+  >([])
+
+  const checkEdits = async () => {
+    setBusy('checkEdits')
+    try {
+      const r = await fetch('/api/check-path', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: editsDir }),
+      })
+      setEditsCheck(await r.json())
+    } finally { setBusy(null) }
+  }
 
   // Existence is not enough: a read-only share looks like a perfectly good
   // folder right up until the export fails on the last step.
@@ -92,6 +110,9 @@ export default function Settings({
     setRoots(d.roots)
     setAllowAny(d.allow_any_path)
     setOutputDir(d.output_dir)
+    setEditsDir(d.edits_dir ?? '')
+    setAutosaveEdits(d.autosave_edits ?? true)
+    fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
     setHasDefPass(d.has_default_password)
@@ -126,6 +147,8 @@ export default function Settings({
         smb: shares.map(({ has_password, mounted, ...s }) => s),
         allow_any_path: allowAny,
         output_dir: outputDir,
+        edits_dir: editsDir,
+        autosave_edits: autosaveEdits,
         default_username: defUser,
         default_password: defPass,
         default_domain: defDomain,
@@ -442,6 +465,58 @@ export default function Settings({
       </section>
 
       {/* ---------------------------------------------- general */}
+      {/* ---------------------------------------------- saved edits */}
+      <section className="mb-8">
+        <h2 className="mb-2 font-medium">Saved edits</h2>
+        <p className="mb-2 text-xs text-white/40">
+          Your cut lists are written here, one small JSON file per clip. Put this folder
+          <b className="text-white/60"> on the share</b> rather than inside the container:
+          the cuts then live with the media, survive a rebuild, and travel with the library
+          if it ever moves. Reopening a clip loads its cuts back automatically.
+        </p>
+        <div className="flex gap-2">
+          <input className={field} value={editsDir} placeholder="/mnt/smb/nas/.video-edits"
+            onChange={(e) => { setEditsDir(e.target.value); setEditsCheck(null) }} />
+          <button onClick={checkEdits} disabled={!editsDir.trim() || busy === 'checkEdits'}
+            className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20 disabled:opacity-40">
+            {busy === 'checkEdits' ? 'Checking…' : 'Check'}
+          </button>
+        </div>
+        {editsCheck && (
+          <div className={`mt-2 rounded px-3 py-2 text-xs ${
+            editsCheck.writable && editsCheck.on_mount ? 'bg-emerald-500/20 text-emerald-100'
+              : editsCheck.writable ? 'bg-amber-500/20 text-amber-100'
+              : 'bg-red-500/20 text-red-100'
+          }`}>
+            {editsCheck.message}
+          </div>
+        )}
+        <label className="mt-2 flex items-center gap-2 text-sm text-white/70">
+          <input type="checkbox" checked={autosaveEdits} onChange={(e) => setAutosaveEdits(e.target.checked)} />
+          Save cuts automatically as I edit
+        </label>
+        {!!savedEdits.length && (
+          <div className="mt-3 rounded border border-white/10">
+            <div className="border-b border-white/10 px-2 py-1 text-xs text-white/50">
+              {savedEdits.length} saved {savedEdits.length === 1 ? 'edit' : 'edits'}
+            </div>
+            <div className="max-h-40 overflow-y-auto">
+              {savedEdits.map((e) => (
+                <div key={e.source} className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-white/5">
+                  <span className={e.exists ? 'text-emerald-400/70' : 'text-red-400/70'}
+                    title={e.exists ? 'source present' : 'source file is missing'}>●</span>
+                  <span className="min-w-0 flex-1 truncate text-white/70">{e.name}</span>
+                  <span className="shrink-0 text-white/35">{e.kept}/{e.segments} kept</span>
+                  <span className="shrink-0 text-white/25">
+                    {e.saved_at ? new Date(e.saved_at * 1000).toLocaleDateString() : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
       <section className="mb-8">
         <h2 className="mb-2 font-medium">Export destination</h2>
 

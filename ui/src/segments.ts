@@ -39,6 +39,37 @@ export function splitAt(segs: Segment[], t: number, minLen = 0.04): Segment[] {
   ]
 }
 
+/**
+ * Makes a loaded cut list tile [0, duration] with no gaps.
+ *
+ * Edits are plain JSON on a share, so they can be hand-edited, truncated, or
+ * written against a different cut of the same film. Anything not covered is
+ * filled in as excluded - which preserves the saved intent exactly, while
+ * ensuring every point on the timeline belongs to some segment. Without this a
+ * gap is a region you cannot cut in, for no visible reason.
+ */
+export function normalise(input: { start: number; end: number; keep: boolean }[], duration: number): Segment[] {
+  const src = [...input]
+    .filter((s) => s.end > s.start)
+    .sort((a, b) => a.start - b.start)
+  const out: Segment[] = []
+  let cursor = 0
+  for (const s of src) {
+    const start = Math.max(cursor, Math.min(s.start, duration))
+    const end = Math.min(s.end, duration)
+    if (end - start < EPS) continue
+    if (start - cursor > 0.01) {
+      out.push({ id: mkId(), start: cursor, end: start, keep: false })
+    }
+    out.push({ id: mkId(), start, end, keep: s.keep })
+    cursor = end
+  }
+  if (duration - cursor > 0.01) {
+    out.push({ id: mkId(), start: cursor, end: duration, keep: false })
+  }
+  return out.length ? out : initialSegments(duration)
+}
+
 export function toggleKeep(segs: Segment[], id: number): Segment[] {
   return segs.map((s) => (s.id === id ? { ...s, keep: !s.keep } : s))
 }

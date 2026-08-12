@@ -132,6 +132,11 @@ fn jint(v: &serde_json::Value, k: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// Probe a real path directly, for callers that already resolved it.
+pub async fn probe_path(p: &Path) -> Result<Probe, ApiError> {
+    run_probe(p).await
+}
+
 /// Runs ffprobe and turns the result into facts plus an opinion.
 async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
     let out = tokio::process::Command::new("ffprobe")
@@ -363,6 +368,17 @@ pub struct Keyframes {
     pub avg_gap: f64,
     pub max_gap: f64,
     pub took_ms: u64,
+}
+
+/// Keyframe timestamps for a path, from cache when possible.
+///
+/// Shared with the export engine, which needs them to snap cut points onto
+/// stream-copy boundaries. Exposed separately so a job never has to go back out
+/// through HTTP to get at its own process's cache.
+pub async fn load_keyframes(st: &AppState, raw: &str) -> Result<Vec<f64>, ApiError> {
+    let q = PathQuery { path: raw.to_string(), refresh: false, peek: false };
+    let kf = get_keyframes(State(st.clone()), Query(q)).await?;
+    Ok(kf.0.times)
 }
 
 pub async fn get_keyframes(

@@ -25,16 +25,17 @@ The timeline also draws **keyframe tick marks**, and each cut point is labelled 
 
 ## Status
 
-**Phase 2 complete.** Everything except the export engine: browse an SMB share, load a
-clip, cut it on a zoomable canvas timeline with keyframe ticks, drop the segments you
-don't want, and see exactly what each cut will cost before you commit.
+**Phase 3 complete.** End to end: browse an SMB share, cut a clip on a zoomable timeline
+with keyframe ticks, drop what you don't want, and export — merged or as separate files,
+optionally into a different container — as a pure stream copy. Cut lists are saved back
+to the share so reopening a clip brings its cuts with it.
 
 | Phase | State |
 |---|---|
 | 0 · scaffolding, library browser, range playback, SMB settings, logs | ✅ done |
 | 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ done |
 | 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | ✅ done |
-| 3 · export engine (keyframe-snap), remux incl. MPEG-TS → MP4 | |
+| 3 · export engine (keyframe-snap), remux incl. MPEG-TS → MP4, saved edits | ✅ done |
 | 4 · smart-cut (frame-exact) | algorithm validated in [`spike/`](spike/) |
 | 5 · preview transcode, waveform, batch queue, presets | |
 
@@ -178,6 +179,13 @@ GET  /api/sprites/sheet?path=&n= one sprite sheet
 POST /api/deep-check             decode the first and last 20s for corruption
 GET  /api/cache                  analysis cache size
 POST /api/cache/clear
+
+GET  /api/edit?path=             saved cut list for a clip
+POST /api/edit                   save one (write-then-rename)
+GET  /api/edits                  every saved cut list
+POST /api/export                 start an export job
+GET  /api/jobs                   job list with live progress
+POST /api/jobs/:id/cancel
 ```
 
 ## Licence

@@ -9,6 +9,8 @@
 //! path handling that remains exists to stop malformed input breaking things,
 //! not to police where you go.
 
+mod edit;
+mod export;
 mod media;
 
 use std::{
@@ -85,6 +87,13 @@ pub struct Settings {
     /// Default export destination.
     #[serde(default)]
     pub output_dir: String,
+    /// Where saved edits (cut lists) live. Put this on the share so the edits
+    /// travel with the media rather than living inside the container.
+    #[serde(default)]
+    pub edits_dir: String,
+    /// Save the cut list automatically as it changes.
+    #[serde(default = "yes")]
+    pub autosave_edits: bool,
     /// Credentials used by any share that leaves its own blank. Most people use
     /// one account for every share on the same NAS, so typing it once is enough.
     #[serde(default)]
@@ -105,6 +114,8 @@ impl Default for Settings {
             default_username: String::new(),
             default_password: String::new(),
             default_domain: String::new(),
+            edits_dir: String::new(),
+            autosave_edits: true,
         }
     }
 }
@@ -244,6 +255,7 @@ pub struct AppState {
     /// Files with a sprite build in flight, so a second request does not start
     /// a duplicate ffmpeg over the same (often network-backed) file.
     pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
+    pub jobs: export::Jobs,
 }
 
 fn now_secs() -> u64 {
@@ -280,6 +292,7 @@ async fn save_settings(path: &Path, s: &Settings) -> Result<(), String> {
 
 // ---------------------------------------------------------------- errors
 
+#[derive(Debug)]
 pub enum ApiError {
     NotFound,
     Bad(String),
@@ -628,6 +641,8 @@ struct SettingsPublic {
     default_domain: String,
     /// Same contract as per-share passwords: presence only, never the value.
     has_default_password: bool,
+    edits_dir: String,
+    autosave_edits: bool,
 }
 
 async fn is_mounted(mp: &str) -> bool {
@@ -674,6 +689,8 @@ async fn get_settings(State(st): State<AppState>) -> Json<SettingsPublic> {
         default_username: s.default_username.clone(),
         default_domain: s.default_domain.clone(),
         has_default_password: !s.default_password.is_empty(),
+        edits_dir: s.edits_dir.clone(),
+        autosave_edits: s.autosave_edits,
     })
 }
 
@@ -696,6 +713,10 @@ struct SettingsUpdate {
     /// Explicitly forget the stored default password.
     #[serde(default)]
     clear_default_password: Option<bool>,
+    #[serde(default)]
+    edits_dir: Option<String>,
+    #[serde(default)]
+    autosave_edits: Option<bool>,
 }
 
 async fn put_settings(
@@ -747,6 +768,8 @@ async fn put_settings(
         if u.clear_default_password.unwrap_or(false) {
             s.default_password.clear();
         }
+        if let Some(v) = u.edits_dir { s.edits_dir = v; }
+        if let Some(v) = u.autosave_edits { s.autosave_edits = v; }
     }
     let s = st.settings.read().await.clone();
     save_settings(&st.config_path, &s)
@@ -1122,6 +1145,7 @@ async fn main() -> anyhow::Result<()> {
         logs,
         status: Arc::new(RwLock::new(std::collections::HashMap::new())),
         sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
+        jobs: export::Jobs::default(),
     };
 
     let cache = media::cache_root();
@@ -1153,6 +1177,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/deep-check", post(media::deep_check))
         .route("/api/cache", get(media::cache_info))
         .route("/api/cache/clear", post(media::cache_clear))
+        // ---- Phase 3: saved edits and export ----
+        .route("/api/edit", get(edit::load_edit).post(edit::save_edit).delete(edit::delete_edit))
+        .route("/api/edits", get(edit::list_edits))
+        .route("/api/export", post(export::start_export))
+        .route("/api/jobs", get(export::list_jobs))
+        .route("/api/jobs/clear", post(export::clear_jobs))
+        .route("/api/jobs/:id/cancel", post(export::cancel_job))
         .route("/api/smb/mount", post(smb_mount))
         .route("/api/smb/mount-all", post(smb_mount_all))
         .route("/api/smb/unmount", post(smb_unmount))

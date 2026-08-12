@@ -5,7 +5,8 @@ import Scrubber, { type SpriteIndex } from './Scrubber'
 import MediaInfo, { type Probe } from './MediaInfo'
 import Timeline from './Timeline'
 import SegmentList from './SegmentList'
-import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe } from './segments'
+import ExportPanel from './ExportPanel'
+import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise } from './segments'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -229,8 +230,61 @@ export default function App() {
   }, [loaded?.abs, editSplit, editDuration])
 
   const startSplitDrag = (e: React.MouseEvent) => beginSplitDrag(e, editRowRef, setEditSplit)
-  const { segs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
+  const { segs, setSegs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null)
+  const [outputDir, setOutputDir] = useState('')
+  const [autosave, setAutosave] = useState(true)
+  const [editSaved, setEditSaved] = useState<string>('')
+
+  // Restore a previously saved cut list for this clip. Runs after useSegments
+  // has reset for the new clip, so it wins.
+  const editLoadedFor = useRef<string>('')
+  useEffect(() => {
+    if (!loaded?.abs || !editDuration) return
+    const key = loaded.abs
+    let cancelled = false
+    ;(async () => {
+      try {
+        const d = await (await fetch(`/api/edit?path=${encodeURIComponent(key)}`)).json()
+        if (cancelled || !d || !d.segments?.length) { editLoadedFor.current = key; return }
+        setSegs(normalise(d.segments, editDuration))
+        editLoadedFor.current = key
+        setEditSaved(d.saved_at ? new Date(d.saved_at * 1000).toLocaleString() : '')
+        say(d.stale
+          ? 'Loaded saved cuts — but the file has changed since, so check them'
+          : `Loaded saved cuts (${d.segments.length} segments)`)
+      } catch { editLoadedFor.current = key }
+    })()
+    return () => { cancelled = true }
+  }, [loaded?.abs, editDuration])
+
+  const saveEdit = async (quiet = false) => {
+    if (!loaded?.abs || !segs.length) return
+    try {
+      const r = await fetch('/api/edit', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          source: loaded.abs, duration: editDuration, fps,
+          segments: segs.map((s) => ({ start: s.start, end: s.end, keep: s.keep })),
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      setEditSaved(new Date().toLocaleString())
+      if (!quiet) say('Cuts saved')
+    } catch (e: any) {
+      if (!quiet) setError(String(e.message ?? e))
+    }
+  }
+
+  // Autosave, debounced. Skipped until the saved edit for this clip has been
+  // loaded, or the freshly-reset single segment would overwrite it.
+  useEffect(() => {
+    if (!autosave || !loaded?.abs || editLoadedFor.current !== loaded.abs) return
+    if (segs.length < 1) return
+    const t = setTimeout(() => saveEdit(true), 1500)
+    return () => clearTimeout(t)
+  }, [segs, autosave, loaded?.abs])
   const dragBase = useRef<typeof segs | null>(null)
 
   const seek = (t: number) => {
@@ -450,7 +504,11 @@ export default function App() {
   const loadRoots = () =>
     fetch('/api/settings')
       .then((r) => r.json())
-      .then((d) => setRoots(d.roots ?? []))
+      .then((d) => {
+        setRoots(d.roots ?? [])
+        setOutputDir(d.output_dir ?? '')
+        setAutosave(d.autosave_edits ?? true)
+      })
       .catch(() => {})
 
   useEffect(() => { loadRoots() }, [])
@@ -753,6 +811,10 @@ export default function App() {
                   <Btn title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>↶</Btn>
                   <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↷</Btn>
                   <Btn title="Remove every cut and start again" onClick={reset}>Reset</Btn>
+                  <div className="mx-1 h-4 w-px bg-white/15" />
+                  <Btn title="Save this cut list to the share so it comes back next time"
+                    tone="accent" onClick={() => saveEdit(false)}>💾 Save cuts</Btn>
+                  {editSaved && <span className="text-[10px] text-white/25">saved {editSaved}</span>}
                   <div className="flex-1" />
                   <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(editTime)}</span>
                   <span className="text-[10px] text-white/25">frame {Math.round(editTime * fps)}</span>
@@ -812,14 +874,13 @@ export default function App() {
                     pinned to the bottom and the tools stay together up top. */}
                 <div className="min-h-0 flex-1" />
 
-                {/* Reserved for Phase 3: output container, merge vs separate
-                    files, destination and the Convert button. */}
-                <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] text-white/30">
-                  <span className="text-white/45">Export</span>
-                  <span>merge or separate files · container remux · destination</span>
-                  <div className="flex-1" />
-                  <span className="rounded bg-white/10 px-2 py-0.5">Phase 3</span>
-                </div>
+                <ExportPanel
+                  source={loaded.abs}
+                  segs={segs}
+                  outputDir={outputDir}
+                  onSetOutputDir={setOutputDir}
+                  onToast={say}
+                />
               </>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-sm text-white/30">
