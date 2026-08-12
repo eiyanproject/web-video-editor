@@ -625,20 +625,21 @@ export default function App() {
 
                 {/* Movavi layout: preview on the left, segment list down the
                     right, timeline spanning the bottom. */}
-                <div className="flex min-h-0 flex-1">
-                  <div className="flex w-3/4 min-w-0 flex-col overflow-auto">
-                    {/* The editor's own feed and playhead, entirely separate
-                        from the preview player on the right of the app.
-                        Height follows the video's own aspect rather than a fixed
-                        box, so there is no letterbox padding the controls down. */}
-                    <div className="w-full shrink-0 bg-black">
+                {/* shrink-0, not flex-1: the row is exactly as tall as the
+                    picture, so the controls sit hard against the player instead
+                    of floating below a column of empty black. */}
+                <div className="flex shrink-0">
+                  <div className="w-3/4 min-w-0 bg-black">
+                    {/* No max-height: clamping the height of a w-full video
+                        reintroduces the letterbox it was meant to remove. */}
+                    <div className="w-full bg-black">
                       <video
                         ref={editVideoRef}
                         key={loaded.abs}
                         src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
                         controls
                         preload="metadata"
-                        className="block h-auto max-h-[46vh] w-full"
+                        className="block h-auto w-full"
                         onLoadedMetadata={() => {
                           const v = editVideoRef.current
                           const t = pendingEditSeek.current
@@ -654,7 +655,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex w-1/4 min-w-[200px] flex-col border-l border-white/10">
+                  <div className="flex w-1/4 min-w-[200px] flex-col overflow-hidden border-l border-white/10">
                     <SegmentList
                       segs={segs}
                       duration={editDuration}
@@ -730,6 +731,10 @@ export default function App() {
                   <div className="flex-1" />
                   <span className="text-white/20">S cut · Del keep/drop · , . frame · Space play</span>
                 </div>
+
+                {/* Slack goes here, below everything, so the export strip stays
+                    pinned to the bottom and the tools stay together up top. */}
+                <div className="min-h-0 flex-1" />
 
                 {/* Reserved for Phase 3: output container, merge vs separate
                     files, destination and the Convert button. */}
