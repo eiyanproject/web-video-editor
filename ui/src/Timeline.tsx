@@ -215,14 +215,29 @@ export default function Timeline({
     setView({ start, end })
   }
 
-  const zoom = (factor: number) => {
+  const MIN_SPAN = 2
+
+  const setSpanAround = (newSpan: number) => {
     const centre = current >= view.start && current <= view.end ? current : (view.start + view.end) / 2
-    const newSpan = Math.min(duration, Math.max(0.5, span * factor))
-    let start = centre - newSpan / 2
-    let end = start + newSpan
-    if (start < 0) { start = 0; end = newSpan }
-    if (end > duration) { end = duration; start = Math.max(0, duration - newSpan) }
+    const s = Math.min(duration, Math.max(MIN_SPAN, newSpan))
+    let start = centre - s / 2
+    let end = start + s
+    if (start < 0) { start = 0; end = s }
+    if (end > duration) { end = duration; start = Math.max(0, duration - s) }
     setView({ start, end })
+  }
+
+  const zoom = (factor: number) => setSpanAround(span * factor)
+
+  // Scale slider, matching the reference UI. Logarithmic: 0 shows the whole
+  // clip, 100 shows a couple of seconds. Linear would spend most of its travel
+  // in a zoom range nobody uses.
+  const scalePos = duration > MIN_SPAN
+    ? Math.round((Math.log(duration / span) / Math.log(duration / MIN_SPAN)) * 100)
+    : 0
+  const onScale = (v: number) => {
+    if (duration <= MIN_SPAN) return
+    setSpanAround(duration * Math.pow(MIN_SPAN / duration, v / 100))
   }
 
   const hoverCost = hover ? cutCost(hover.t, keyframes, fps) : null
@@ -236,6 +251,13 @@ export default function Timeline({
           className="rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">−</button>
         <button onClick={() => setView({ start: 0, end: duration })} title="Fit the whole clip"
           className="rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">fit</button>
+        <span className="ml-1 text-white/30">scale</span>
+        <input
+          type="range" min={0} max={100} value={scalePos}
+          onChange={(e) => onScale(Number(e.target.value))}
+          title="Zoom the timeline"
+          className="h-1 w-28 cursor-pointer accent-indigo-400"
+        />
         <span className="ml-1 font-mono">{fmt(view.start)} – {fmt(view.end)}</span>
         <div className="flex-1" />
         {hover && (
@@ -250,7 +272,7 @@ export default function Timeline({
         )}
       </div>
 
-      <div ref={wrapRef} className="relative h-24 w-full px-2">
+      <div ref={wrapRef} className="relative h-16 w-full px-2">
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: '100%' }}

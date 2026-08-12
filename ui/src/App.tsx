@@ -626,17 +626,19 @@ export default function App() {
                 {/* Movavi layout: preview on the left, segment list down the
                     right, timeline spanning the bottom. */}
                 <div className="flex min-h-0 flex-1">
-                  <div className="flex min-w-0 flex-1 flex-col">
+                  <div className="flex w-3/4 min-w-0 flex-col overflow-auto">
                     {/* The editor's own feed and playhead, entirely separate
-                        from the preview player on the right of the app. */}
-                    <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+                        from the preview player on the right of the app.
+                        Height follows the video's own aspect rather than a fixed
+                        box, so there is no letterbox padding the controls down. */}
+                    <div className="w-full shrink-0 bg-black">
                       <video
                         ref={editVideoRef}
                         key={loaded.abs}
                         src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
                         controls
                         preload="metadata"
-                        className="max-h-full max-w-full"
+                        className="block h-auto max-h-[46vh] w-full"
                         onLoadedMetadata={() => {
                           const v = editVideoRef.current
                           const t = pendingEditSeek.current
@@ -652,7 +654,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex w-[44%] min-w-[240px] flex-col border-l border-white/10">
+                  <div className="flex w-1/4 min-w-[200px] flex-col border-l border-white/10">
                     <SegmentList
                       segs={segs}
                       duration={editDuration}

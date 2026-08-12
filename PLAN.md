@@ -283,10 +283,16 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
   preview player on the right — including when both hold the same file. Finding a clip
   and cutting one are different jobs with different positions; sharing an element makes
   both worse.
-- **Layout follows the reference**: preview upper-left, segment list down the right of
-  the editor pane, timeline spanning the bottom, and an export strip beneath it. The
-  preview is deliberately small — the timeline and the segment list are what you look at
-  while cutting.
+- **Layout follows the reference**: preview upper-left at 3/4 width, segment list down
+  the right quarter, timeline spanning the bottom, export strip beneath it. The preview
+  is deliberately modest — the timeline and the segment list are what you look at while
+  cutting.
+- **No letterbox.** The player's height follows the video's own aspect rather than
+  sitting in a fixed box, so there are no black bars padding the controls downward. On a
+  16:9 source the container is exactly the picture; a 4:3 clip simply makes it taller.
+- **Scale slider** on the timeline, as in the reference. Logarithmic — 0 fits the whole
+  clip, 100 shows about two seconds — because a linear mapping spends most of its travel
+  in a zoom range nobody uses.
 - **Typed timecode.** A mouse cannot land on a chosen frame of a two-hour clip, and cut
   points often come from notes. The box accepts `1:02:03.500`, `02:03.5` or plain
   seconds, refuses anything else rather than silently seeking to zero, and offers
