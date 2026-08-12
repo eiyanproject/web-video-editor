@@ -1,16 +1,16 @@
-# Settings and stored SMB credentials. Never commit.
-config/
-.env
 
 # Build artefacts
-node_modules/
-dist/
-target/
-
 # Local scratch
+# Settings and stored SMB credentials. Never commit.
+*.json.bak
+.env
+cache/
+certs/
+config/
+dist/
+node_modules/
 output/
 sample-media/
-*.json.bak
 smb-test.json
+target/
 ui/tsconfig.tsbuildinfo
-cache/

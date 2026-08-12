@@ -5,6 +5,10 @@
 # about. Connect a share in Settings instead; it mounts inside the container at
 # /mnt/smb/<name>. Everything is persisted to ./config on the host.
 
+# Explicit project name: without it both compose files derive the same name
+# from the folder, and starting one treats the other's containers as strays.
+name: web-video-editor
+
 services:
   api:
     build:
@@ -29,6 +33,10 @@ services:
       - DAC_READ_SEARCH
     security_opt:
       - apparmor:unconfined
+    # The API is never published to the host: everything reaches it through the
+    # ui container, which is the only thing that can apply auth or TLS.
+    expose:
+      - "8080"
     # Optional: Intel iGPU for faster thumbnail scanning and future preview
     # transcoding. Harmless to leave commented out - trim/join needs no GPU.
     # devices:
@@ -41,6 +49,17 @@ services:
     container_name: wve-ui
     restart: unless-stopped
     ports:
-      - "${PORT:-8088}:80"
+      # Port 80 by default so the bare IP works with no port to remember.
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      # Drop fullchain.pem and privkey.pem here to serve real TLS. Absent, port
+      # 443 simply is not listened on unless TLS_SELFSIGNED=1.
+      - ./certs:/certs:ro
+    environment:
+      AUTH_USER: "${AUTH_USER:-}"
+      AUTH_PASS: "${AUTH_PASS:-}"
+      TLS_SELFSIGNED: "${TLS_SELFSIGNED:-0}"
+      FORCE_HTTPS: "${FORCE_HTTPS:-0}"
     depends_on:
       - api

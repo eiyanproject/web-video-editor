@@ -89,7 +89,27 @@ Or clone and run it directly:
 git clone https://github.com/eiyanproject/web-video-editor.git && cd web-video-editor && ./install.sh
 ```
 
-Then open `http://<server>:8088`.
+Then open **`http://<server>`** — it serves on port 80, so there is no port to remember.
+
+### Ports, TLS and a login
+
+| | |
+|---|---|
+| `--port 8088` | serve HTTP somewhere else, e.g. when a reverse proxy already owns 80 |
+| `--https-port 8443` | move HTTPS off 443 |
+| `--auth user:password` | basic auth in front of everything |
+| `--no-auth` | remove it again |
+| `--self-signed` | TLS on 443 with a throwaway certificate |
+
+For real HTTPS, drop `fullchain.pem` and `privkey.pem` into `./certs` and re-run — port
+443 is only listened on when a certificate exists. Behind a reverse proxy, the usual
+arrangement is to leave TLS to the proxy and point it at port 80; `X-Forwarded-For`,
+`X-Forwarded-Proto` and `Range` are all passed through correctly.
+
+> **There is no login by default.** On a LAN that is fine. Anything reachable from
+> outside it should have `--auth` set at minimum, because whoever reaches this app can
+> browse your shares, stream any file, and write exports. A VPN or Tailscale is better
+> still. `/api/health` stays open either way, so uptime checks work without credentials.
 
 ### Updating
 

@@ -6,6 +6,10 @@
 # ./config/settings.json on the host, so they survive container rebuilds and
 # you only enter them once. The app starts with nothing and asks.
 
+# Explicit project name: without it both compose files derive the same name
+# from the folder, and starting one treats the other's containers as strays.
+name: web-video-editor-dev
+
 services:
   api:
     build:
