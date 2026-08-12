@@ -201,6 +201,14 @@ export default function Settings({
 
   const field = 'w-full rounded bg-white/10 px-2 py-1 text-sm outline-none placeholder:text-white/25'
 
+  // Each box only accepts what it can actually hold. Rejecting a stray character
+  // as it is typed is kinder than accepting it and failing at mount time with a
+  // message about the wrong thing.
+  const cleanPath = (v: string) => v.replace(/[\r\n\t]/g, '').replace(/^\s+/, '')
+  const cleanShareName = (v: string) => v.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40)
+  const cleanUser = (v: string) => v.replace(/[\r\n\t\s]/g, '').slice(0, 128)
+  const cleanOptions = (v: string) => v.replace(/[\r\n\t\s]/g, '').slice(0, 200)
+
   if (!data) return <div className="p-6 text-white/40">Loading…</div>
 
   return (
@@ -268,7 +276,7 @@ export default function Settings({
             <label className="text-xs text-white/50">
               Username
               <input className={field} value={defUser} autoComplete="off"
-                onChange={(e) => setDefUser(e.target.value)} />
+                onChange={(e) => setDefUser(cleanUser(e.target.value))} />
             </label>
             <label className="text-xs text-white/50">
               Password {hasDefPass && (
@@ -291,7 +299,7 @@ export default function Settings({
             <label className="text-xs text-white/50">
               Domain / workgroup
               <input className={field} value={defDomain}
-                onChange={(e) => setDefDomain(e.target.value)} />
+                onChange={(e) => setDefDomain(cleanUser(e.target.value))} />
             </label>
           </div>
         </div>
@@ -357,18 +365,19 @@ export default function Settings({
               <label className="text-xs text-white/50">
                 Name
                 <input className={field} value={s.name} placeholder="nas"
-                  onChange={(e) => upd(i, { name: e.target.value })} />
+                  title="Used as the folder name under /mnt/smb, so letters, digits, dot, dash and underscore only"
+                  onChange={(e) => upd(i, { name: cleanShareName(e.target.value) })} />
               </label>
               <label className="text-xs text-white/50">
                 Address
                 <input className={field} value={s.address} placeholder="\\192.168.1.10\media"
-                  onChange={(e) => upd(i, { address: e.target.value })} />
+                  onChange={(e) => upd(i, { address: cleanPath(e.target.value) })} />
               </label>
               <label className="text-xs text-white/50">
                 Username
                 <input className={field} value={s.username} autoComplete="off"
                   placeholder={defUser || data.default_username ? 'using default' : ''}
-                  onChange={(e) => upd(i, { username: e.target.value })} />
+                  onChange={(e) => upd(i, { username: cleanUser(e.target.value) })} />
               </label>
               <label className="text-xs text-white/50">
                 Password {s.has_password && (
@@ -383,17 +392,18 @@ export default function Settings({
               <label className="text-xs text-white/50">
                 Domain / workgroup <span className="text-white/25">(optional)</span>
                 <input className={field} value={s.domain}
-                  onChange={(e) => upd(i, { domain: e.target.value })} />
+                  onChange={(e) => upd(i, { domain: cleanUser(e.target.value) })} />
               </label>
               <label className="text-xs text-white/50">
                 Mount point <span className="text-white/25">(blank → /mnt/smb/{s.name || 'name'})</span>
                 <input className={field} value={s.mountpoint}
-                  onChange={(e) => upd(i, { mountpoint: e.target.value })} />
+                  onChange={(e) => upd(i, { mountpoint: cleanPath(e.target.value) })} />
               </label>
               <label className="col-span-2 text-xs text-white/50">
                 Extra mount options <span className="text-white/25">(e.g. vers=2.1 for older NAS)</span>
                 <input className={field} value={s.options} placeholder="vers=3.0"
-                  onChange={(e) => upd(i, { options: e.target.value })} />
+                  title="Comma-separated mount options, no spaces"
+                  onChange={(e) => upd(i, { options: cleanOptions(e.target.value) })} />
               </label>
             </div>
 
@@ -477,9 +487,9 @@ export default function Settings({
         {roots.map((r, i) => (
           <div key={i} className="mb-2 flex gap-2">
             <input className={`${field} w-40`} value={r.name} placeholder="name"
-              onChange={(e) => setRoots(roots.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+              onChange={(e) => setRoots(roots.map((x, j) => (j === i ? { ...x, name: cleanShareName(e.target.value) } : x)))} />
             <input className={field} value={r.path} placeholder="/media or /mnt/smb/nas"
-              onChange={(e) => setRoots(roots.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
+              onChange={(e) => setRoots(roots.map((x, j) => (j === i ? { ...x, path: cleanPath(e.target.value) } : x)))} />
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-white/60">
               <input type="checkbox" checked={r.writable}
                 onChange={(e) => setRoots(roots.map((x, j) => (j === i ? { ...x, writable: e.target.checked } : x)))} />
@@ -505,7 +515,7 @@ export default function Settings({
           <button onClick={() => setPicking('edits')} title="Browse for a folder"
             className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20">📂 Browse</button>
           <input className={field} value={editsDir} placeholder="/mnt/smb/nas/.video-edits"
-            onChange={(e) => { setEditsDir(e.target.value); setEditsCheck(null) }} />
+            onChange={(e) => { setEditsDir(cleanPath(e.target.value)); setEditsCheck(null) }} />
           <button onClick={checkEdits} disabled={!editsDir.trim() || busy === 'checkEdits'}
             className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20 disabled:opacity-40">
             {busy === 'checkEdits' ? 'Checking…' : 'Check'}
@@ -566,7 +576,7 @@ export default function Settings({
                 <button onClick={() => setPicking('output')} title="Browse for a folder"
                   className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20">📂 Browse</button>
                 <input className={field} value={outputDir} placeholder="/mnt/smb/nas/edited"
-                  onChange={(e) => { setOutputDir(e.target.value); setPathCheck(null) }} />
+                  onChange={(e) => { setOutputDir(cleanPath(e.target.value)); setPathCheck(null) }} />
                 <button onClick={checkOutput} disabled={!outputDir.trim() || busy === 'check'}
                   className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20 disabled:opacity-40">
                   {busy === 'check' ? 'Checking…' : 'Check'}

@@ -344,6 +344,16 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
   points often come from notes. The box accepts `1:02:03.500`, `02:03.5` or plain
   seconds, refuses anything else rather than silently seeking to zero, and offers
   *Cut at time* and *Nearest keyframe* beside it.
+- **Every input accepts only what it can hold.** The timecode box takes digits and
+  nothing else; share names are restricted to characters that survive a filesystem;
+  usernames, domains and mount options reject whitespace and newlines; paths strip
+  control characters. Rejecting a stray character as it is typed beats accepting it and
+  failing later with a message about the wrong thing.
+- **Typing a digit overwrites and advances**, so HH → MM → SS → ms flows without ever
+  typing a separator, and the field cannot hold a value that is not a time. A digit too
+  large for a tens position is not an error to reject: typing `6` at the minutes clearly
+  means six minutes, so it becomes `06` and the caret moves to the seconds. Same as any
+  clock-setting UI worth using.
 - **The timecode box is a spinner.** Up/Down changes the digit under the caret — tens of
   minutes steps ten minutes, the last millisecond digit steps one millisecond — and
   Left/Right hop between digits, skipping the separators. The picture seeks as you nudge,

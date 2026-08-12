@@ -143,7 +143,7 @@ export default function ExportPanel({
           className="shrink-0 rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">📂</button>
         <input
           value={outputDir}
-          onChange={(e) => onSetOutputDir(e.target.value)}
+          onChange={(e) => onSetOutputDir(e.target.value.replace(/[\r\n\t]/g, '').replace(/^\s+/, ''))}
           placeholder="output folder…"
           className="min-w-0 flex-1 rounded bg-white/10 px-2 py-0.5 font-mono outline-none placeholder:font-sans placeholder:text-white/25"
         />

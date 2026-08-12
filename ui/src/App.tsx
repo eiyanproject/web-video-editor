@@ -73,6 +73,34 @@ const STEP_BY_CARET = [
 /** Character positions that hold a digit, for caret hopping. */
 const DIGIT_POSITIONS = [0, 1, 3, 4, 6, 7, 9, 10, 11]
 
+/**
+ * Largest digit each position may hold.
+ *
+ * Minutes and seconds cannot start with 6-9, because no such time exists. Typing
+ * one there is not an error to reject, though - it plainly means "6 minutes", so
+ * the tens digit becomes 0, the typed digit lands in the ones, and the caret
+ * moves on to the next field. Same as every clock-setting UI worth using.
+ */
+const MAX_DIGIT: Record<number, number> = {
+  0: 9, 1: 9,      // hours
+  3: 5, 4: 9,      // minutes
+  6: 5, 7: 9,      // seconds
+  9: 9, 10: 9, 11: 9,
+}
+
+/** Which field a caret position belongs to, and where that field starts. */
+const FIELD_OF: Record<number, [number, number]> = {
+  0: [0, 1], 1: [0, 1],
+  3: [3, 4], 4: [3, 4],
+  6: [6, 7], 7: [6, 7],
+  9: [9, 11], 10: [9, 11], 11: [9, 11],
+}
+
+/** Strips anything that is not part of a timecode. Guards paste and IME input. */
+function sanitiseTimecode(v: string): string {
+  return v.replace(/[^0-9:.]/g, '').slice(0, 12)
+}
+
 // HH:MM:SS.mmm — millisecond precision, which is what a cut point needs.
 const fmtTimecode = (t: number) => {
   if (!isFinite(t) || t < 0) t = 0
@@ -343,19 +371,90 @@ export default function App() {
 
   const tcRef = useRef<HTMLInputElement>(null)
 
-  /** Keeps the caret where it was after React re-renders the value. */
-  const restoreCaret = (pos: number) => {
-    requestAnimationFrame(() => {
-      const el = tcRef.current
-      if (el) el.setSelectionRange(pos, pos)
-    })
+  // Caret position for a controlled input has to be reapplied *after* React has
+  // written the new value. requestAnimationFrame fires before that commit, so
+  // the browser reset the selection to the end and every digit after the first
+  // landed in the wrong field. An effect with no dependency array runs after
+  // every render, which is exactly the moment needed.
+  const pendingCaret = useRef<number | null>(null)
+  const restoreCaret = (pos: number) => { pendingCaret.current = pos }
+
+  useEffect(() => {
+    if (pendingCaret.current == null) return
+    const el = tcRef.current
+    if (el && document.activeElement === el) {
+      const p = pendingCaret.current
+      el.setSelectionRange(p, p)
+    }
+    pendingCaret.current = null
+  })
+
+  /** Writes one digit at `pos`, returning the new string and where to go next. */
+  const applyDigit = (value: string, pos: number, digit: number): [string, number] => {
+    const chars = value.split('')
+    const max = MAX_DIGIT[pos] ?? 9
+    const [fieldStart, fieldEnd] = FIELD_OF[pos] ?? [pos, pos]
+
+    // A digit too large for a tens position means the user typed a whole value:
+    // 6 in the minutes tens is "6 minutes", not "6x minutes".
+    if (digit > max && pos === fieldStart && fieldEnd > fieldStart) {
+      chars[fieldStart] = '0'
+      chars[fieldStart + 1] = String(digit)
+      const after = DIGIT_POSITIONS.find((d) => d > fieldEnd)
+      return [chars.join(''), after ?? fieldEnd]
+    }
+
+    chars[pos] = String(Math.min(digit, max))
+    const next = DIGIT_POSITIONS.find((d) => d > pos)
+    return [chars.join(''), next ?? pos]
   }
 
   const handleTcKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const el = e.currentTarget
-    const caret = el.selectionStart ?? 0
+    let caret = el.selectionStart ?? 0
 
     if (e.key === 'Enter') { goToTypedTime(); return }
+
+    // Typing a digit overwrites the one under the caret and moves on, so the
+    // field never grows, never needs the separators typing, and cannot hold a
+    // value that is not a time.
+    if (/^[0-9]$/.test(e.key)) {
+      e.preventDefault()
+      let base = el.value
+      if (!/^\d\d:\d\d:\d\d\.\d\d\d$/.test(base)) {
+        base = fmtTimecode(parseTimecode(base) ?? editTime)
+      }
+      // A full selection means "start again".
+      if (el.selectionStart === 0 && el.selectionEnd === base.length) caret = 0
+      if (!DIGIT_POSITIONS.includes(caret)) {
+        caret = DIGIT_POSITIONS.find((d) => d >= caret) ?? 11
+      }
+      const [next, nextCaret] = applyDigit(base, caret, Number(e.key))
+      const t = parseTimecode(next)
+      const clamped = t == null ? editTime : Math.min(t, editDuration || t)
+      setTcInput(fmtTimecode(clamped))
+      seek(clamped)
+      restoreCaret(nextCaret)
+      return
+    }
+
+    // Backspace zeroes the digit behind the caret rather than deleting a
+    // character, which would break the fixed layout the caret arithmetic needs.
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault()
+      const target = e.key === 'Backspace'
+        ? [...DIGIT_POSITIONS].reverse().find((d) => d < caret) ?? 0
+        : (DIGIT_POSITIONS.includes(caret) ? caret : DIGIT_POSITIONS.find((d) => d > caret) ?? 11)
+      const base = /^\d\d:\d\d:\d\d\.\d\d\d$/.test(el.value)
+        ? el.value
+        : fmtTimecode(parseTimecode(el.value) ?? editTime)
+      const chars = base.split('')
+      chars[target] = '0'
+      const t = parseTimecode(chars.join(''))
+      if (t != null) { setTcInput(fmtTimecode(t)); seek(t) }
+      restoreCaret(target)
+      return
+    }
 
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
@@ -979,6 +1078,7 @@ export default function App() {
                   ['L', 'load the selected clip'],
                   ['T', 'move the editor to where the preview is'],
                   ['G', 'jump into the timecode box'],
+                  ['0-9', 'in the box: type digits, HH → MM → SS → ms'],
                   ['↑ ↓', 'in the box: change the digit under the cursor'],
                   ['← →', 'in the box: move between digits'],
                   ['K', 'snap to the nearest keyframe'],
@@ -1157,7 +1257,8 @@ export default function App() {
                   <input
                     ref={tcRef}
                     value={tcInput}
-                    onChange={(e) => setTcInput(e.target.value)}
+                    onChange={(e) => setTcInput(sanitiseTimecode(e.target.value))}
+                    inputMode="numeric"
                     onFocus={() => {
                       // Normalise to the full form so every digit has a fixed
                       // position for the caret arithmetic to rely on.

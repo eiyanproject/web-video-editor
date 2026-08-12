@@ -84,7 +84,8 @@ export default function FolderPicker({
           <button onClick={() => parent && open(parent)} disabled={!parent}
             className="rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-30">↑ Up</button>
           <button onClick={() => open(cwd)} className="rounded bg-white/10 px-2 py-1 hover:bg-white/20">⟳</button>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)}
+          <input value={newName}
+            onChange={(e) => setNewName(e.target.value.replace(/[\\/:*?"<>|\r\n\t]/g, ''))}
             placeholder="new subfolder name…"
             className="ml-2 w-44 rounded bg-white/10 px-2 py-1 outline-none placeholder:text-white/25" />
           <button
@@ -115,7 +116,8 @@ export default function FolderPicker({
         </div>
 
         <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
-          <input value={manual} onChange={(e) => setManual(e.target.value)}
+          <input value={manual}
+            onChange={(e) => setManual(e.target.value.replace(/[\r\n\t]/g, '').replace(/^\s+/, ''))}
             onKeyDown={(e) => { if (e.key === 'Enter' && manual.trim()) onPick(manual.trim()) }}
             placeholder="or type a path"
             className="min-w-0 flex-1 rounded bg-white/10 px-2 py-1 font-mono text-xs outline-none placeholder:font-sans placeholder:text-white/25" />
