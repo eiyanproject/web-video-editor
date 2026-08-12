@@ -52,6 +52,27 @@ function parseTimecode(s: string): number | null {
   return h * 3600 + min * 60 + sec
 }
 
+// Timecode spinner.
+//
+// `HH:MM:SS.mmm` is 12 characters, and which digit the caret sits on decides
+// what Up/Down changes — tens of minutes under the caret steps ten minutes, the
+// last millisecond digit steps one. That is how every broadcast timecode field
+// has worked for decades, and it beats retyping the whole string to nudge a cut
+// by a frame.
+//
+//        0 1 : 3 4 : 6 7 . 9 10 11
+//        H H   M M   S S   m m  m
+const STEP_BY_CARET = [
+  36000, 3600, 3600,   // hours (caret on ':' behaves as the digit to its left)
+  600, 60, 60,         // minutes
+  10, 1, 1,            // seconds
+  0.1, 0.01, 0.001,    // milliseconds
+  0.001,               // caret parked at the very end
+]
+
+/** Character positions that hold a digit, for caret hopping. */
+const DIGIT_POSITIONS = [0, 1, 3, 4, 6, 7, 9, 10, 11]
+
 // HH:MM:SS.mmm — millisecond precision, which is what a cut point needs.
 const fmtTimecode = (t: number) => {
   if (!isFinite(t) || t < 0) t = 0
@@ -296,6 +317,51 @@ export default function App() {
     const clamped = Math.max(0, Math.min(editDuration || v?.duration || 0, t))
     if (v) v.currentTime = clamped
     setEditTime(clamped)
+  }
+
+  const tcRef = useRef<HTMLInputElement>(null)
+
+  /** Keeps the caret where it was after React re-renders the value. */
+  const restoreCaret = (pos: number) => {
+    requestAnimationFrame(() => {
+      const el = tcRef.current
+      if (el) el.setSelectionRange(pos, pos)
+    })
+  }
+
+  const handleTcKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const el = e.currentTarget
+    const caret = el.selectionStart ?? 0
+
+    if (e.key === 'Enter') { goToTypedTime(); return }
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      const base = parseTimecode(el.value) ?? editTime
+      const step = STEP_BY_CARET[Math.min(caret, STEP_BY_CARET.length - 1)] ?? 1
+      const next = Math.max(0, Math.min(editDuration || Infinity,
+        base + (e.key === 'ArrowUp' ? step : -step)))
+      setTcInput(fmtTimecode(next))
+      // Seek as it changes: the point of nudging a digit is watching the frame.
+      seek(next)
+      restoreCaret(caret)
+      return
+    }
+
+    // Hop between digits, skipping the ':' and '.' separators so every press
+    // lands somewhere that Up/Down can actually act on.
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (e.shiftKey) return // leave text selection alone
+      const dir = e.key === 'ArrowRight' ? 1 : -1
+      const candidates = dir > 0
+        ? DIGIT_POSITIONS.filter((p) => p > caret)
+        : DIGIT_POSITIONS.filter((p) => p < caret).reverse()
+      if (candidates.length) {
+        e.preventDefault()
+        el.setSelectionRange(candidates[0], candidates[0])
+      }
+      return
+    }
   }
 
   const goToTypedTime = () => {
@@ -860,12 +926,21 @@ export default function App() {
                     two-hour clip, and a cut point often comes from a note. */}
                 <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
                   <input
+                    ref={tcRef}
                     value={tcInput}
                     onChange={(e) => setTcInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') goToTypedTime() }}
+                    onFocus={() => {
+                      // Normalise to the full form so every digit has a fixed
+                      // position for the caret arithmetic to rely on.
+                      const t = parseTimecode(tcInput)
+                      setTcInput(fmtTimecode(t ?? editTime))
+                    }}
+                    onKeyDown={handleTcKey}
+                    title="↑↓ adjusts the digit under the cursor · ←→ moves between digits · Enter jumps"
                     placeholder="Go to  1:02:03.500 · 02:03.5 · 123.4"
                     className="w-56 rounded bg-white/10 px-2 py-1 font-mono outline-none placeholder:font-sans placeholder:text-white/25"
                   />
+                  <span className="text-[10px] text-white/25">↑↓ digit · ←→ move</span>
                   <Btn title="Jump to the typed time" onClick={goToTypedTime}>Go</Btn>
                   <Btn title="Put the current playhead time in the box, to nudge and re-enter"
                     onClick={() => setTcInput(fmtTimecode(editTime))}>⤴ Current</Btn>

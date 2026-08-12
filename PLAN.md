@@ -314,7 +314,12 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **Typed timecode.** A mouse cannot land on a chosen frame of a two-hour clip, and cut
   points often come from notes. The box accepts `1:02:03.500`, `02:03.5` or plain
   seconds, refuses anything else rather than silently seeking to zero, and offers
-  *Cut at time* and *Nearest keyframe* beside it. The box is **not** cleared after use
+  *Cut at time* and *Nearest keyframe* beside it.
+- **The timecode box is a spinner.** Up/Down changes the digit under the caret — tens of
+  minutes steps ten minutes, the last millisecond digit steps one millisecond — and
+  Left/Right hop between digits, skipping the separators. The picture seeks as you nudge,
+  because watching the frame is the entire point. This is how broadcast timecode fields
+  have always worked, and it beats retyping the string to move a cut by a frame. The box is **not** cleared after use
   and survives a reload: a timecode is typically used several times — nudged a frame,
   returned to, then cut at — and retyping it each time is the whole problem it solves.
 - **Preview surface** with the current frame, plus transport controls: jump-to-start,
