@@ -161,6 +161,25 @@ const Btn = ({
   </button>
 )
 
+/** The character each physical key position carries on a US QWERTY board.
+ *
+ *  Shortcuts match on `e.key` OR on this, because the two answer different
+ *  questions: `e.key` is the character the active LAYOUT produced, this is
+ *  WHERE THE KEY SITS. On a US layout they always agree and this changes
+ *  nothing. They come apart on a JIS keyboard - `[`, `]`, `/` and `,` `.` sit
+ *  in different places - and under a kana IME, where a letter key produces a
+ *  kana character that matches no shortcut at all.
+ *
+ *  Only keys that are actually bound are listed. Arrows, Tab, Escape, Delete,
+ *  Backspace and Space report the same `e.key` on every layout, so they are
+ *  matched directly and are absent here. */
+const CODE_CHAR: Record<string, string> = {
+  KeyF: 'f', KeyG: 'g', KeyK: 'k', KeyL: 'l', KeyP: 'p',
+  KeyS: 's', KeyT: 't', KeyU: 'u', KeyX: 'x', KeyZ: 'z',
+  Digit1: '1', Digit2: '2', Digit3: '3',
+  Slash: '/', BracketLeft: '[', BracketRight: ']', Comma: ',', Period: '.',
+}
+
 /** Detents at the quarters. Dragging to a round split is the common intent and
  *  hitting it by hand is fiddly, so anything within 3% lands on it exactly. */
 const SNAPS = [0.25, 0.5, 0.75]
@@ -278,6 +297,10 @@ export default function App() {
   const stepSegmentRef = useRef<((d: number) => void) | null>(null)
   const saveEditRef = useRef<(() => void) | null>(null)
   const exportRef = useRef<(() => void) | null>(null)
+  const unloadRef = useRef<(() => void) | null>(null)
+  const goUpRef = useRef<(() => void) | null>(null)
+  /** Deadline for the second U that confirms discarding unsaved cuts. */
+  const discardArmed = useRef(0)
   /// Which player the keyboard should drive: whichever was last played,
   /// clicked or seeked.
   const lastPlayerRef = useRef<'editor' | 'preview'>('editor')
@@ -427,6 +450,11 @@ export default function App() {
   }
 
   const handleTcKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Let an input method finish. Mid-composition every key arrives as
+    // 'Process' / keyCode 229, and the digit and caret arithmetic below would
+    // act on a keystroke the user has not committed to yet.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+
     const el = e.currentTarget
     let caret = el.selectionStart ?? 0
 
@@ -575,6 +603,53 @@ export default function App() {
   toggleRef.current = toggleSelected
   undoRef.current = undo
   redoRef.current = redo
+  goUpRef.current = () => { if (parent) openDir(parent) }
+
+  // --- unloading ------------------------------------------------------------
+  // Both live here rather than inline on their buttons, so the U key and the
+  // buttons cannot drift apart.
+  const clearEditor = () => { setLoaded(null); say('Editor cleared') }
+
+  const closePreview = () => {
+    // Pausing and clearing the source first stops the browser from
+    // continuing to pull the file over the network after unload.
+    const v = videoRef.current
+    if (v) { v.pause(); v.removeAttribute('src'); v.load() }
+    // The waveform belonged to this editing session; closing the clip is the
+    // natural moment to throw it away.
+    if (selected) {
+      fetch(`/api/waveform?path=${encodeURIComponent(selected.abs)}`, { method: 'DELETE' })
+        .catch(() => {})
+    }
+    if (waveTimer.current) { clearTimeout(waveTimer.current); waveTimer.current = null }
+    // Player state only. The editor keeps its clip and its cuts.
+    setSelected(null); setCurTime(0); setDuration(0); setPeaks(undefined)
+    setProbe(null); setDeep(null); setPlayError(null)
+    say(loaded ? 'Preview closed — your edit is untouched' : 'Video closed')
+  }
+
+  // U empties the pane you were last in, falling back to the other one so the
+  // key still does the obvious thing when only one of them is filled.
+  unloadRef.current = () => {
+    const editorFirst = lastPlayerRef.current !== 'preview'
+    if (editorFirst && loaded) return discardEditor()
+    if (selected) return closePreview()
+    if (loaded) return discardEditor()
+    say('Nothing to unload')
+  }
+
+  // Autosave writes the cut list on every change, so clearing then loses
+  // nothing. With autosave off the cuts exist only in this tab, and a stray
+  // keystroke would throw away real work - so ask, in the status line rather
+  // than a dialog, and take a second U within a few seconds as the answer.
+  const discardEditor = () => {
+    if (autosave || !canUndo || Date.now() < discardArmed.current) {
+      discardArmed.current = 0
+      clearEditor(); return
+    }
+    discardArmed.current = Date.now() + 5000
+    say('Unsaved cuts — press U again to discard, or Ctrl+S to save')
+  }
 
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000) }
 
@@ -650,21 +725,82 @@ export default function App() {
   // native handler has already run and won.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // An input method that is mid-composition reports a placeholder key
+      // ('Process', keyCode 229) rather than the key that was pressed. Acting
+      // on that fires an arbitrary shortcut. Never true without an IME, so a
+      // US layout is unaffected.
+      if (e.isComposing || e.keyCode === 229) return
+
       const el = e.target as HTMLElement | null
       const typing = !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)
+
+      // e.key is what the LAYOUT produced; e.code is WHERE THE KEY SITS. They
+      // agree on US QWERTY and diverge on a JIS board, where the punctuation
+      // shortcuts move to other positions, and under a kana IME, where letters
+      // arrive as kana and match nothing. Every shortcut accepts either, so the
+      // US behaviour is bit-for-bit what it was and a JIS board also works.
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      let phys = CODE_CHAR[e.code] ?? ''
+      if (e.shiftKey) {
+        // Shifted, the position means something else: Slash carries '?', and a
+        // shifted digit is punctuation, not an export mode.
+        phys = phys === '/' ? '?' : /^[a-z]$/.test(phys) ? phys : ''
+      }
+      const is = (c: string) => k === c || phys === c
+
+      // Only keys the browser would otherwise act on get cancelled. A plain
+      // letter has no default worth taking, so those are left alone and every
+      // browser shortcut, extension and accessibility tool keeps working.
+      const take = () => { e.preventDefault(); e.stopPropagation() }
 
       // Tab moves between the two panes. Taken even when a file row has focus,
       // but never inside a text field, so forms still tab normally.
       if (e.key === 'Tab' && !typing) {
-        e.preventDefault()
         const next = lastPlayerRef.current === 'editor' ? 'preview' : 'editor'
+        const target = next === 'editor' ? editVideoRef.current : videoRef.current
+        // Only claim Tab when there is a pane to land in. With no clip picked
+        // there are no players at all, and swallowing it would trap focus with
+        // no keyboard route into the file list.
+        if (!target) return
+        e.preventDefault()
         lastPlayerRef.current = next
         setActivePane(next)
-        const target = next === 'editor' ? editVideoRef.current : videoRef.current
-        target?.focus?.()
+        target.focus()
         return
       }
       if (typing) return
+
+      // Finding a file, the help sheet and the export mode touch no player, so
+      // they must not wait for one to exist. F, / and P are precisely the keys
+      // that FIND the clip whose <video> element the rest of this handler needs;
+      // gating them behind it left a fresh page with a dead keyboard.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (is('f')) { focusListRef.current?.(); return }
+        if (is('/')) { take(); focusFilterRef.current?.(); return }   // Firefox quick-find
+        if (is('p')) { openPasteRef.current?.(); return }
+        if (is('l')) { loadIntoEditorRef.current?.(); return }
+        if (is('u')) { unloadRef.current?.(); return }
+
+        // Backspace goes UP A FOLDER while the file list has focus, the way it
+        // does in every file manager. Everywhere else it stays the segment
+        // keep/drop toggle it has always been. Browsing is the one flow with no
+        // clip loaded, so without this the way in has a key and the way out
+        // does not.
+        if (e.key === 'Backspace' && listRef.current?.contains(el)) {
+          take(); goUpRef.current?.(); return
+        }
+
+        // F1 as well as '?', because '?' is Shift+Slash and a mismatched
+        // physical layout can put it somewhere the user cannot find. The one
+        // key that explains the others must not be the hardest to press.
+        if (is('?')) { setShowHelp((h) => !h); return }
+        if (e.key === 'F1') { take(); setShowHelp((h) => !h); return }
+        if (e.key === 'Escape') { setShowHelp(false); return }
+
+        if (is('1')) { setExportMode('merge'); say('Export: single file'); return }
+        if (is('2')) { setExportMode('separate'); say('Export: separate files'); return }
+        if (is('3')) { setExportMode('separate_merge'); say('Export: safe join'); return }
+      }
 
       const wantEditor = lastPlayerRef.current !== 'preview'
       const v = (wantEditor ? editVideoRef.current : videoRef.current)
@@ -682,61 +818,39 @@ export default function App() {
         isEditor ? setEditTime(t) : setCurTime(t)
       }
 
-      // Only keys the browser would otherwise act on get cancelled. A plain
-      // letter has no default worth taking, so those are left alone and every
-      // browser shortcut, extension and accessibility tool keeps working.
-      const take = () => { e.preventDefault(); e.stopPropagation() }
-
       if (e.ctrlKey || e.metaKey) {
         // Ctrl + arrows: one second, for placing a cut without hunting.
         if (e.key === 'ArrowRight') { take(); return jump(1) }
         if (e.key === 'ArrowLeft') { take(); return jump(-1) }
-        switch (e.key.toLowerCase()) {
-          case 'z': take(); e.shiftKey ? redoRef.current?.() : undoRef.current?.(); return
-          case 's': take(); saveEditRef.current?.(); return   // browser save
-          case 'enter': exportRef.current?.(); return
-        }
+        if (is('z')) { take(); e.shiftKey ? redoRef.current?.() : undoRef.current?.(); return }
+        if (is('s')) { take(); saveEditRef.current?.(); return }   // browser save
+        if (e.key === 'Enter') { exportRef.current?.(); return }
         return
       }
       if (e.altKey) return   // leave browser navigation alone
 
-      switch (e.key) {
-        case 'ArrowRight': take(); return jump(5)
-        case 'ArrowLeft': take(); return jump(-5)
-        case '.': return jump(frame)
-        case ',': return jump(-frame)
-        case ' ':
-          take()   // stops the page scrolling
-          v.paused ? v.play().catch(() => {}) : v.pause(); return
-
-        // --- moving around ---
-        case 'f': case 'F': focusListRef.current?.(); return
-        case '/': take(); focusFilterRef.current?.(); return   // Firefox quick-find
-        case 'p': case 'P': openPasteRef.current?.(); return
-        case 'l': case 'L': loadIntoEditorRef.current?.(); return
-
-        // --- carrying a time from the preview into the editor ---
-        case 't': case 'T': transferTimeRef.current?.(); return
-        case 'g': case 'G': focusTimecodeRef.current?.(); return
-        case 'k': case 'K': snapKeyframeRef.current?.(); return
-
-        // --- cutting ---
-        // X for cut, as in cut-and-paste everywhere else. S still works, since
-        // that is what video editors tend to use for split.
-        case 'x': case 'X': case 's': case 'S': splitRef.current?.(); return
-        case 'Delete': toggleRef.current?.(); return
-        case 'Backspace': take(); toggleRef.current?.(); return  // used to go back
-        case '[': stepSegmentRef.current?.(-1); return
-        case ']': stepSegmentRef.current?.(1); return
-
-        // --- export mode, then go ---
-        case '1': setExportMode('merge'); say('Export: single file'); return
-        case '2': setExportMode('separate'); say('Export: separate files'); return
-        case '3': setExportMode('separate_merge'); say('Export: safe join'); return
-
-        case '?': setShowHelp((h) => !h); return
-        case 'Escape': setShowHelp(false); return
+      if (e.key === 'ArrowRight') { take(); return jump(5) }
+      if (e.key === 'ArrowLeft') { take(); return jump(-5) }
+      if (is('.')) return jump(frame)
+      if (is(',')) return jump(-frame)
+      if (e.key === ' ') {
+        take()   // stops the page scrolling
+        v.paused ? v.play().catch(() => {}) : v.pause(); return
       }
+
+      // --- carrying a time from the preview into the editor ---
+      if (is('t')) { transferTimeRef.current?.(); return }
+      if (is('g')) { focusTimecodeRef.current?.(); return }
+      if (is('k')) { snapKeyframeRef.current?.(); return }
+
+      // --- cutting ---
+      // X for cut, as in cut-and-paste everywhere else. S still works, since
+      // that is what video editors tend to use for split.
+      if (is('x') || is('s')) { splitRef.current?.(); return }
+      if (e.key === 'Delete') { toggleRef.current?.(); return }
+      if (e.key === 'Backspace') { take(); toggleRef.current?.(); return }  // used to go back
+      if (is('[')) { stepSegmentRef.current?.(-1); return }
+      if (is(']')) { stepSegmentRef.current?.(1); return }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -825,7 +939,15 @@ export default function App() {
     } finally { setDeepBusy(false) }
   }
 
+  // Changing folder unmounts every row, which drops keyboard focus to <body>
+  // and kills the arrow keys - the list only sees them when focus is inside it.
+  // So remember that the user was IN the list and put them back on the first
+  // row of the new folder. Only when focus was already there, so navigating by
+  // mouse never yanks focus away from whatever they were using.
+  const restoreListFocus = useRef(false)
+
   const openDir = async (p: string, all = showAll) => {
+    restoreListFocus.current = !!listRef.current?.contains(document.activeElement)
     setError(null); setLoading(true)
     try {
       const r = await fetch(`/api/browse?path=${encodeURIComponent(p)}${all ? '&all=true' : ''}`)
@@ -839,6 +961,14 @@ export default function App() {
       setEntries([]); setError(String(e.message ?? e))
     } finally { setLoading(false) }
   }
+
+  useEffect(() => {
+    if (!restoreListFocus.current) return
+    restoreListFocus.current = false
+    const first = listRef.current?.querySelector<HTMLButtonElement>('button[data-row]')
+    first?.focus()
+    first?.scrollIntoView({ block: 'nearest' })
+  }, [entries])
 
   // Reopen wherever you were last time. Falls back to the roots list if that
   // folder has gone away, e.g. a share that is not mounted yet.
@@ -1081,6 +1211,7 @@ export default function App() {
                 ['Find the film', [
                   ['F', 'jump into the file list'],
                   ['↑ ↓', 'move through it · Enter opens'],
+                  ['Backspace', 'up a folder, from the list'],
                   ['/', 'filter this folder'],
                   ['P', 'paste a path'],
                 ]],
@@ -1093,6 +1224,7 @@ export default function App() {
                 ]],
                 ['Take it to the editor', [
                   ['L', 'load the selected clip'],
+                  ['U', 'unload — empties the active pane'],
                   ['T', 'move the editor to where the preview is'],
                   ['G', 'jump into the timecode box'],
                   ['0-9', 'in the box: type digits, HH → MM → SS → ms'],
@@ -1114,7 +1246,7 @@ export default function App() {
                   ['Ctrl+Enter', 'start the export'],
                 ]],
                 ['Anywhere', [
-                  ['?', 'this list'],
+                  ['? or F1', 'this list'],
                   ['Esc', 'close'],
                 ]],
               ] as const).map(([group, rows]) => (
@@ -1165,7 +1297,7 @@ export default function App() {
               disabled={!selected} onClick={() => { setLoaded(selected); say(`Loaded ${selected!.name}`) }}>
               ⇤ Load into editor
             </Btn>
-            <Btn title="Clear the editor" disabled={!loaded} onClick={() => { setLoaded(null); say('Editor cleared') }}>
+            <Btn title="Clear the editor (U)" disabled={!loaded} onClick={clearEditor}>
               ✕ Clear
             </Btn>
             <div className="flex-1" />
@@ -1506,24 +1638,8 @@ export default function App() {
               {muted ? '🔇' : '🔊'}
             </Btn>
             <Btn title="Fullscreen" disabled={!selected} onClick={() => videoRef.current?.requestFullscreen()}>⛶</Btn>
-            <Btn title="Close this video and free the player" disabled={!selected}
-              onClick={() => {
-                // Pausing and clearing the source first stops the browser from
-                // continuing to pull the file over the network after unload.
-                const v = videoRef.current
-                if (v) { v.pause(); v.removeAttribute('src'); v.load() }
-                // The waveform belonged to this editing session; closing the
-                // clip is the natural moment to throw it away.
-                if (selected) {
-                  fetch(`/api/waveform?path=${encodeURIComponent(selected.abs)}`, { method: 'DELETE' })
-                    .catch(() => {})
-                }
-                if (waveTimer.current) { clearTimeout(waveTimer.current); waveTimer.current = null }
-                // Player state only. The editor keeps its clip and its cuts.
-                setSelected(null); setCurTime(0); setDuration(0); setPeaks(undefined)
-                setProbe(null); setDeep(null); setPlayError(null)
-                say(loaded ? 'Preview closed — your edit is untouched' : 'Video closed')
-              }}>
+            <Btn title="Close this video and free the player (U)" disabled={!selected}
+              onClick={closePreview}>
               ⏏ Unload
             </Btn>
             <Btn
@@ -1678,7 +1794,10 @@ export default function App() {
                   <span className="w-20 shrink-0 text-right text-xs text-white/25">{fmtDate(e.mtime)}</span>
                   <span className="w-16 shrink-0 text-right text-xs text-white/30">{fmtSize(e.size)}</span>
                 </button>
-                <div className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100">
+                {/* focus-within as well as hover: these are real buttons in the
+                    tab order, and revealing them only on hover meant a keyboard
+                    user tabbed into controls they could not see. */}
+                <div className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                   {!e.is_dir && e.is_video && (
                     <Btn title="Load straight into the editor" onClick={() => { setSelected(e); setLoaded(e); say(`Loaded ${e.name}`) }}>⇤</Btn>
                   )}
