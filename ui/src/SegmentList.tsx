@@ -34,37 +34,38 @@ export default function SegmentList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-white/50">
-        <span className="font-medium text-white/70">Segments</span>
-        <span>{keptCount} of {segs.length} kept</span>
+      <div className="flex shrink-0 items-center gap-1.5 overflow-hidden px-2 py-1 text-[11px] text-white/50">
+        <span className="shrink-0 font-medium text-white/70">Segments</span>
+        <span className="shrink-0">{keptCount}/{segs.length}</span>
         <div className="flex-1" />
-        <span className="font-mono">{tc(kept)} / {tc(duration)}</span>
+        <span className="shrink-0 truncate font-mono">{tc(kept)}</span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
+      {/* Vertical scroll only. A horizontal scrollbar in a narrow side panel is
+          always a layout bug, never a feature - rows must fit whatever width
+          the split is dragged to. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2">
         {segs.map((s, i) => {
           const cost = i < segs.length - 1 ? cuts[i] : null
           return (
             <div key={s.id}>
               <div
                 onClick={() => { onSelect(s.id); onSeek(s.start) }}
-                className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-xs ${
+                className={`flex cursor-pointer items-center gap-1.5 overflow-hidden rounded border px-1.5 py-1 text-[11px] ${
                   s.id === selectedId ? 'border-indigo-400/60 bg-indigo-500/15' : 'border-white/10 hover:bg-white/5'
                 } ${s.keep ? '' : 'opacity-45'}`}
               >
-                <span className={`w-14 shrink-0 ${s.keep ? 'text-white/70' : 'text-white/40 line-through'}`}>
-                  Seg {i + 1}
+                <span className={`shrink-0 tabular-nums ${s.keep ? 'text-white/60' : 'text-white/40 line-through'}`}>
+                  {i + 1}
                 </span>
-                <span className={`flex-1 font-mono ${s.keep ? 'text-white/80' : 'text-white/40 line-through'}`}>
-                  {tc(s.start)} – {tc(s.end)}
+                <span className={`min-w-0 flex-1 truncate font-mono ${s.keep ? 'text-white/80' : 'text-white/40 line-through'}`}>
+                  {tc(s.start)}–{tc(s.end)}
                 </span>
-                <span className="w-14 shrink-0 text-right font-mono text-white/35">
-                  {tc(s.end - s.start)}
-                </span>
+                <span className="shrink-0 font-mono text-white/30">{tc(s.end - s.start)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); onToggle(s.id) }}
                   title={s.keep ? 'Exclude this segment from the export' : 'Include it again'}
-                  className={`shrink-0 rounded px-2 py-0.5 ${
+                  className={`shrink-0 rounded px-1.5 ${
                     s.keep ? 'bg-white/10 hover:bg-red-500/40' : 'bg-emerald-500/25 hover:bg-emerald-500/40'
                   }`}
                 >
@@ -74,18 +75,18 @@ export default function SegmentList({
 
               {/* the cut between this segment and the next */}
               {cost && (
-                <div className="flex items-center gap-2 py-0.5 pl-4 text-[10px]">
-                  <span className="text-white/20">├ cut at</span>
+                <div className="flex items-center gap-1.5 overflow-hidden py-0.5 pl-2 text-[10px]">
                   <button onClick={() => onSeek(s.end)}
-                    className="font-mono text-white/45 underline-offset-2 hover:text-white hover:underline">
-                    {tc(s.end)}
+                    title="Jump to this cut"
+                    className="shrink-0 font-mono text-white/40 underline-offset-2 hover:text-white hover:underline">
+                    ✂{tc(s.end)}
                   </button>
-                  <span className={cost.lossless ? 'text-emerald-300/80' : 'text-amber-300/80'}>
-                    {cost.lossless ? 'lossless' : `exact · re-encodes ${cost.reencode.toFixed(2)}s`}
+                  <span className={`min-w-0 flex-1 truncate ${cost.lossless ? 'text-emerald-300/80' : 'text-amber-300/80'}`}>
+                    {cost.lossless ? 'lossless' : `−${cost.reencode.toFixed(2)}s`}
                   </span>
                   <button onClick={() => onMerge(i)} title="Remove this cut and merge the two segments"
-                    className="ml-auto rounded px-1.5 text-white/30 hover:bg-white/10 hover:text-white/70">
-                    remove cut
+                    className="shrink-0 rounded px-1 text-white/25 hover:bg-white/10 hover:text-white/70">
+                    ✕
                   </button>
                 </div>
               )}
@@ -100,15 +101,15 @@ export default function SegmentList({
       </div>
 
       {segs.length > 1 && (
-        <div className="border-t border-white/10 px-3 py-2 text-[11px]">
-          <span className="text-white/40">Export will </span>
+        <div className="shrink-0 border-t border-white/10 px-2 py-1.5 text-[10px] leading-snug">
           {lossless ? (
-            <span className="text-emerald-300">stream-copy everything — no re-encoding at all.</span>
+            <span className="text-emerald-300">All cuts lossless — pure stream copy.</span>
           ) : (
             <>
-              <span className="text-white/70">re-encode {reencode.toFixed(1)}s</span>
+              <span className="text-white/40">Re-encodes </span>
+              <span className="text-white/75">{reencode.toFixed(1)}s</span>
               <span className="text-white/40">
-                {' '}of {tc(kept)} ({kept > 0 ? ((reencode / kept) * 100).toFixed(1) : '0'}%), copying the rest.
+                {' '}of {tc(kept)} ({kept > 0 ? ((reencode / kept) * 100).toFixed(1) : '0'}%)
               </span>
             </>
           )}

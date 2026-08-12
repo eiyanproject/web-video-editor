@@ -290,6 +290,15 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
 - **No letterbox.** The player's height follows the video's own aspect rather than
   sitting in a fixed box, so there are no black bars padding the controls downward. On a
   16:9 source the container is exactly the picture; a 4:3 clip simply makes it taller.
+- **The segment list never sets the row height.** It is given exactly the picture's
+  height, measured, and scrolls vertically within it. Letting the list size the row is
+  what pushed the timeline off the bottom of the screen once a handful of cuts existed —
+  a side panel that grows the layout is a bug, not a feature.
+- **No horizontal scrollbar, ever.** Rows truncate to whatever width the split is at. A
+  sideways scrollbar in a narrow panel always means the content was laid out wrong.
+- **Draggable split** between player and segment list, with detents at 25 / 50 / 75%.
+  Dragging to a round split is the common intent and hitting it by hand is fiddly, so
+  the handle snaps within 3%. Double-click resets to 75/25. The position persists.
 - **Scale slider** on the timeline, as in the reference. Logarithmic — 0 fits the whole
   clip, 100 shows about two seconds — because a linear mapping spends most of its travel
   in a zoom range nobody uses.

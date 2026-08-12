@@ -104,6 +104,8 @@ type Session = {
   editTime?: number
   /** Whatever is in the Go-to box, kept so a noted timecode survives a reload. */
   tcInput?: string
+  /** Player/segment-list split inside the editor, as a fraction. */
+  editSplit?: number
   muted?: boolean
   sortKey?: SortKey
   sortAsc?: boolean
@@ -168,6 +170,44 @@ export default function App() {
   const editVideoRef = useRef<HTMLVideoElement>(null)
   const [editTime, setEditTime] = useState(0)
   const [tcInput, setTcInput] = useState('')
+
+  // Split between the player and the segment list, as a fraction of the editor
+  // pane's width. Draggable, with detents at the thirds.
+  const [editSplit, setEditSplit] = useState(0.75)
+  const editRowRef = useRef<HTMLDivElement>(null)
+
+  // The segment list must never decide how tall the row is - that is what was
+  // shoving the timeline off the bottom of the screen once a few cuts existed.
+  // Measure the picture and give the list exactly that height to scroll within.
+  const [videoH, setVideoH] = useState(0)
+  useEffect(() => {
+    const el = editVideoRef.current
+    if (!el) { setVideoH(0); return }
+    const ro = new ResizeObserver(() => setVideoH(el.clientHeight))
+    ro.observe(el)
+    setVideoH(el.clientHeight)
+    return () => ro.disconnect()
+  }, [loaded?.abs, editSplit, editDuration])
+
+  const startSplitDrag = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const onMove = (ev: MouseEvent) => {
+      const r = editRowRef.current?.getBoundingClientRect()
+      if (!r || !r.width) return
+      let f = (ev.clientX - r.left) / r.width
+      f = Math.min(0.85, Math.max(0.15, f))
+      // Snap to the thirds: dragging to a round split is the common intent, and
+      // hitting it exactly by hand is fiddly.
+      for (const snap of [0.25, 0.5, 0.75]) if (Math.abs(f - snap) < 0.03) f = snap
+      setEditSplit(f)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
   const { segs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null)
   const dragBase = useRef<typeof segs | null>(null)
@@ -423,6 +463,7 @@ export default function App() {
 
     if (s.muted != null) setMuted(s.muted)
     if (s.tcInput) setTcInput(s.tcInput)
+    if (typeof s.editSplit === 'number' && s.editSplit > 0.1 && s.editSplit < 0.9) setEditSplit(s.editSplit)
     if (s.editTime != null) pendingEditSeek.current = s.editTime
     if (s.sortKey) setSortKey(s.sortKey)
     if (s.sortAsc != null) setSortAsc(s.sortAsc)
@@ -452,7 +493,7 @@ export default function App() {
   // Latest values for the periodic writer, so playback position is saved
   // without re-registering a timer four times a second.
   const sessionRef = useRef<Session>({})
-  sessionRef.current = { selected, loaded, time: curTime, editTime, tcInput, muted, sortKey, sortAsc, showAll }
+  sessionRef.current = { selected, loaded, time: curTime, editTime, tcInput, editSplit, muted, sortKey, sortAsc, showAll }
   const writeSession = () => {
     if (!hydratedRef.current) return
     try { localStorage.setItem(SESSION, JSON.stringify(sessionRef.current)) } catch { /* quota */ }
@@ -474,7 +515,7 @@ export default function App() {
   const editBucket = Math.floor(editTime / 3)
   useEffect(() => {
     writeSession()
-  }, [hydrated, timeBucket, editBucket, tcInput, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
+  }, [hydrated, timeBucket, editBucket, tcInput, editSplit, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
 
   useEffect(() => {
     const last = localStorage.getItem(LAST_DIR)
@@ -628,8 +669,8 @@ export default function App() {
                 {/* shrink-0, not flex-1: the row is exactly as tall as the
                     picture, so the controls sit hard against the player instead
                     of floating below a column of empty black. */}
-                <div className="flex shrink-0">
-                  <div className="w-3/4 min-w-0 bg-black">
+                <div ref={editRowRef} className="flex shrink-0">
+                  <div className="min-w-0 bg-black" style={{ width: `${editSplit * 100}%` }}>
                     {/* No max-height: clamping the height of a w-full video
                         reintroduces the letterbox it was meant to remove. */}
                     <div className="w-full bg-black">
@@ -655,7 +696,20 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex w-1/4 min-w-[200px] flex-col overflow-hidden border-l border-white/10">
+                  {/* Drag handle. Double-click restores the default 75/25. */}
+                  <div
+                    onMouseDown={startSplitDrag}
+                    onDoubleClick={() => setEditSplit(0.75)}
+                    title="Drag to resize · snaps at 25%, 50%, 75% · double-click to reset"
+                    className="group relative w-1 shrink-0 cursor-col-resize bg-white/10 hover:bg-indigo-400/60"
+                  >
+                    <div className="absolute inset-y-0 -left-1 -right-1" />
+                  </div>
+
+                  <div
+                    className="flex min-w-0 flex-1 flex-col overflow-hidden border-l border-white/10"
+                    style={videoH ? { height: videoH } : undefined}
+                  >
                     <SegmentList
                       segs={segs}
                       duration={editDuration}
