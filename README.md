@@ -40,8 +40,9 @@ brings its cuts with it.
 | 4 · smart-cut, frame-exact | ✅ |
 | 5 · waveform, batch remux, folder pickers, keyboard flow | ✅ |
 
-Remaining ideas: HLS preview for codecs browsers refuse (HEVC, AC3), export presets.
-Neither affects MP4 work, which is the well-supported path throughout.
+Planned next, both written up in [`HANDOVER.md`](HANDOVER.md): a phone-friendly
+workflow that never summons the on-screen keyboard, and a subtitle tab covering
+editing, soft-muxing, offline text-to-speech and importing outside audio tracks.
 
 ## What it does
 
@@ -69,8 +70,10 @@ Neither affects MP4 work, which is the well-supported path throughout.
 Phase 3 is the point where it replaces a desktop editor for the job. Phase 4 is what
 makes it better than the free alternatives.
 
-See [`PLAN.md`](PLAN.md) for the architecture, the smart-cut algorithm, server sizing
-and the design principles, and [`SETUP-LXC.md`](SETUP-LXC.md) for Proxmox deployment.
+[`HANDOVER.md`](HANDOVER.md) is the context doc: deployment, the decisions that look
+wrong until you know why, known limitations, and what is planned next.
+[`PLAN.md`](PLAN.md) has the architecture, the smart-cut algorithm and the design
+principles; [`SETUP-LXC.md`](SETUP-LXC.md) covers Proxmox.
 
 ---
 
