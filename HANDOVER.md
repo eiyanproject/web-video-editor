@@ -27,7 +27,8 @@ back to the share.
 | Export | frame-exact or keyframe-snap; single / separate / safe join; container remux |
 | Saved cut lists | one small JSON per clip, kept on the share |
 | Batch remux | whole-file container conversion with poster thumbnails |
-| Keyboard | the entire flow; press `?` in the app |
+| Keyboard | the entire flow; press `?` or `F1` in the app |
+| Phone UI | a separate front end on its own port — §6 |
 
 **Primary target is MP4 / H.264 / AAC**, which is the best-supported path throughout.
 HEVC, MKV and AC3 all export fine; only in-browser *preview* is limited for them.
@@ -47,6 +48,7 @@ rebuilds, restarts, and never touches settings, credentials or saved cut lists.
 |---|---|
 | `--port 8088` | move HTTP, e.g. when a reverse proxy owns 80 |
 | `--https-port 8443` | move HTTPS |
+| `--phone-port 8081` | move the phone UI's port (§6) |
 | `--auth user:password` | basic auth in front of everything |
 | `--no-auth` | remove it |
 | `--self-signed` | throwaway certificate on 443 |
@@ -88,13 +90,22 @@ api/          Rust + Axum
   media.rs    probe, keyframe index, sprites, poster, waveform  (all cached)
   edit.rs     saved cut lists
   export.rs   the export engine, including smart-cut
-ui/           React 19 + Vite + Tailwind
+ui/           React 19 + Vite + Tailwind — TWO front ends, one bundle
+  index.html  → src/main.tsx → App.tsx          the desktop editor
+  phone.html  → src/phone/main.tsx → PhoneApp.tsx   the phone editor (§6)
   App.tsx     shell, both players, keyboard, session persistence
   Timeline.tsx / SegmentList.tsx / segments.ts   the edit model and its views
   ExportPanel.tsx / Batch.tsx / Settings.tsx / Logs.tsx / FolderPicker.tsx
+  phone/      PhoneApp.tsx, ScrubPad.tsx, TimeWheel.tsx
+  lib/shared.ts   types and formatters BOTH front ends import
   entrypoint.sh   renders the nginx config at start: ports, TLS, auth
 spike/        the experiments that settled the smart-cut design
 ```
+
+`segments.ts` and `lib/shared.ts` are the shared floor: the edit model, the timecode
+format and the `Entry`/`Probe` types are defined once and imported by both front ends,
+so they cannot drift on what a cut list means. Everything above that line is separate
+on purpose — see §6.
 
 ### Data
 
@@ -150,6 +161,14 @@ real error and left alone until you press Reconnect.
 **Every capability has a visible control**, and every empty state says what happened and
 offers the button that fixes it. See `PLAN.md` §3.3–3.6.
 
+**Shortcuts match `e.key` OR the US-QWERTY character for `e.code`, and bail out while an
+IME is composing.** `e.key` is what the layout produced; `e.code` is where the key sits.
+They agree on US QWERTY and come apart on a JIS keyboard, where the punctuation
+shortcuts move, and under a kana IME, where letters arrive as kana and match nothing.
+Related: the shortcuts that touch no player — `F`, `/`, `P`, `L`, `?`, the export modes —
+must stay above the "is there a `<video>`" check. They are what *finds* the clip that
+creates the player, and gating them behind it left a fresh page with a dead keyboard.
+
 ---
 
 ## 5. Known limitations
@@ -171,52 +190,85 @@ Nothing here breaks MP4 trimming; they are the honest edges.
 
 ---
 
-## 6. Planned: phone-friendly workflow
+## 6. The phone UI
 
-The current UI assumes a mouse, a keyboard and a wide screen. On a phone it is usable
-but wrong in specific, fixable ways.
+A **separate front end on its own port**, not a responsive mode of the desktop app.
+Point a phone at `http://<server>:8081`; the desktop header has a 📱 button, and
+opening the desktop URL on a phone offers a banner, because that is the address people
+actually bookmark.
 
-### The problems
+### Why separate rather than responsive
 
-1. **Two panes side by side** collapse into unusable slivers.
-2. **Hover-only affordances** do not exist on touch: the scrub thumbnails, the per-row
-   action buttons that appear on hover, and every tooltip.
-3. **The keyboard pops up constantly.** Focusing the timecode field summons the OS
-   keyboard, which covers the video — and the field is designed to be driven by arrows
-   and digits, not typed into freely.
-4. **Hit targets are ~20 px.** Touch wants 44 px.
-5. **Drag targets are 6 px wide** — the cut handles and the pane dividers.
+The desktop editor assumes a mouse, a keyboard and two side-by-side panes. Threading
+`isPhone &&` through an 1800-line component to undo those assumptions produces one tree
+that serves neither end well and cannot be changed without testing both. Two front ends
+over one shared floor — `segments.ts` for the edit model, `lib/shared.ts` for types and
+formatters, and the same HTTP API — means the phone layout is single-column by
+construction and nothing done for touch can regress the desktop.
 
-### The shape of the fix
+The cost is real and worth naming: a feature that belongs in both has to be added
+twice. That is the trade accepted here, and it is why anything shareable belongs below
+the line rather than in either app.
 
-**Layout.** One column below ~768 px, with a bottom tab bar: *Library · Player ·
-Editor · Export*. Each is a full screen rather than a pane. The timeline gets the full
-width, which is more than it has today.
+### How it is served
 
-**No keyboard unless asked.** The timecode field becomes `readOnly` with
-`inputMode="none"` on touch, and gets a purpose-built on-screen pad: a digit grid plus
-±1 frame / ±1 s / ±10 s, and a "nearest keyframe" key. This is *better* than the
-keyboard for the job — the OS keyboard has no frame step. A small "type it" toggle stays
-for the rare case.
+One Vite build, two entry points (`index.html`, `phone.html`). nginx renders a second
+server block on `PHONE_PORT` whose index is `phone.html`; the `/api` block is shared, so
+both get identical streaming and range behaviour. `VITE_PHONE_PORT` is baked into the
+desktop bundle at build time for its 📱 link, which is why changing the port needs a
+rebuild — `install.sh --phone-port` does exactly that.
 
-**Gestures.** Drag the playhead; pinch to zoom the timeline; long-press a segment for
-keep/drop; swipe between tabs. Every gesture keeps a visible button equivalent, per the
-existing control-surface rule.
+In dev, a second Vite server on 5274 with its own `cacheDir`; two dev servers sharing
+`node_modules/.vite` fight over the optimised deps and each restart invalidates the
+other.
 
-**Touch-sized controls.** 44 px minimum on anything tappable; cut handles widen to a
-~24 px grab area while staying 2 px visually; dividers hidden entirely in one-column
-mode since there is nothing to divide.
+### What it does
 
-**Replacements for hover.** Tap-and-hold on the scrub bar shows the thumbnail preview
-where hover did; row actions move into a swipe-left reveal or an always-visible
-overflow button.
+Single column: player on top, editor below, file browser as a full-screen sheet one tap
+from a persistent button. Drag-to-scrub via **Pointer Events** — one code path for
+finger, stylus and mouse, with pointer capture so a drag that leaves the short bar keeps
+scrubbing. `touch-action: none` is the part that makes it work at all; without it the
+browser claims the gesture for scrolling before the first `pointermove` arrives.
 
-**Practicalities.** Screen Wake Lock during an export so the phone does not sleep
-mid-job; a PWA manifest so it installs to the home screen and runs without browser
-chrome; `100dvh` rather than `100vh` so the mobile URL bar does not crop the layout.
+The timecode field is replaced by **alarm-clock wheels**, hh : mm : ss : ff, plus ±1
+frame buttons and a nearest-keyframe button. The point is not novelty: focusing a text
+timecode field on a phone summons the OS keyboard, which covers the video you are trying
+to cut. The wheels never do.
 
-Estimated as a phase of its own. No backend work — this is entirely UI, which is why it
-is worth doing as one focused pass rather than piecemeal.
+The last column counts **frames, not milliseconds**. Milliseconds were built first and
+were miserable to use - a thousand stops is 32000px of scrolling, and almost every one
+of them is a position no cut can land on. Frames are the real resolution of the job:
+25 or 30 stops, one flick end to end, every stop reachable. It is also what broadcast
+timecode has always been. Two details that bit: each wheel must compose its new time
+from the LATEST time rather than the render it was drawn in, or moving two wheels in
+quick succession throws away the first; and the frame index must round rather than
+floor, because setting frame 7 puts the video at 0.23333 which it reports back as
+0.2333, and flooring that jumps visibly back to frame 6.
+
+While an export is running the editor locks: cut, uncut, undo/redo, keep/drop and
+loading another clip are all held. Editing is local and costs the server nothing, but
+loading a clip reads the whole file to build a keyframe index, over the same share the
+export is streaming through. The job list is polled even when this phone started
+nothing, because the queue is shared - an export launched from the desktop has to lock
+the phone too. **The desktop has no equivalent lock**; it blocks a second export but
+will still index a clip mid-export.
+
+Everything tappable is at least 44px, nothing depends on hover, and the layout is
+`100dvh` rather than `100vh` so the mobile URL bar does not crop it.
+
+Cut lists go through the same `/api/edit` endpoint with the same autosave, so an edit
+started on the desktop continues on the phone and back.
+
+### Still missing
+
+- **No sprite thumbnails on the scrub bar.** Tap-and-hold to preview is not wired up.
+- **The scrub bar is coarse by nature**: ~330px across a 2.5-hour film is roughly 27
+  seconds per pixel. The wheels and frame buttons carry fine positioning. A zoomed bar
+  covering ±30s around the playhead is the obvious next step.
+- **No Screen Wake Lock during export**, so a phone can sleep mid-job.
+- **No PWA manifest**, so it does not install to the home screen.
+- **Settings, Logs and Batch are desktop-only.** The phone reads the export folder but
+  cannot set it; shares are configured on the desktop.
 
 ---
 

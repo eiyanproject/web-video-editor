@@ -39,10 +39,19 @@ brings its cuts with it.
 | 3 · export engine, container remux, saved cut lists | ✅ |
 | 4 · smart-cut, frame-exact | ✅ |
 | 5 · waveform, batch remux, folder pickers, keyboard flow | ✅ |
+| 6 · phone UI: separate front end on its own port, touch scrub, timecode wheels | ✅ |
 
-Planned next, both written up in [`HANDOVER.md`](HANDOVER.md): a phone-friendly
-workflow that never summons the on-screen keyboard, and a subtitle tab covering
+Planned next, written up in [`HANDOVER.md`](HANDOVER.md): a subtitle tab covering
 editing, soft-muxing, offline text-to-speech and importing outside audio tracks.
+
+## On a phone
+
+The phone UI is a **separate front end on its own port** (8081 by default), not a
+responsive mode of the desktop one. Point a phone at `http://<server>:8081` — or open
+the desktop UI on a phone and take the banner it offers. Single column, player above
+editor, files one tap away, drag-to-scrub, and alarm-clock timecode wheels so the OS
+keyboard never covers the video. Both front ends read and write the same cut lists on
+the share, so an edit started on the desktop continues on the phone.
 
 ## What it does
 

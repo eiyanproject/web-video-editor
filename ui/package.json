@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:phone": "vite --config vite.phone.config.ts --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

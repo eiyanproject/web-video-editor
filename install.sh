@@ -10,6 +10,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/eiyanproject/web-video-editor/main/install.sh | bash
 #   ./install.sh --port 8088                 # somewhere else
+#   ./install.sh --phone-port 8081           # the phone UI's own port
 #   ./install.sh --auth me:secret            # basic auth, for anything reachable
 #   ./install.sh --self-signed               # TLS on 443 with a throwaway cert
 #   ./install.sh --uninstall
@@ -24,6 +25,7 @@ DEFAULT_DIR="/opt/web-video-editor"
 DIR=""
 PORT=""
 HTTPS_PORT=""
+PHONE_PORT=""
 AUTH=""
 SELF_SIGNED=""
 DO_PULL=1
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
     --dir)       DIR="${2:-}"; shift 2 ;;
     --port|--http-port) PORT="${2:-}"; shift 2 ;;
     --https-port) HTTPS_PORT="${2:-}"; shift 2 ;;
+    --phone-port) PHONE_PORT="${2:-}"; shift 2 ;;
     --auth)      AUTH="${2:-}"; shift 2 ;;
     --no-auth)   AUTH="none"; shift ;;
     --self-signed) SELF_SIGNED=1; shift ;;
@@ -161,6 +164,7 @@ get_env () { grep "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- ; }
 
 [ -n "$PORT" ] && { set_env HTTP_PORT "$PORT"; ok "http port set to $PORT"; }
 [ -n "$HTTPS_PORT" ] && { set_env HTTPS_PORT "$HTTPS_PORT"; ok "https port set to $HTTPS_PORT"; }
+[ -n "$PHONE_PORT" ] && { set_env PHONE_PORT "$PHONE_PORT"; ok "phone ui port set to $PHONE_PORT"; }
 [ -n "$SELF_SIGNED" ] && { set_env TLS_SELFSIGNED 1; ok "self-signed TLS enabled"; }
 
 case "$AUTH" in
@@ -177,6 +181,10 @@ esac
 # Defaults, only filled in if absent, so a re-run never resets your choices.
 grep -q '^HTTP_PORT='  .env || set_env HTTP_PORT 80
 grep -q '^HTTPS_PORT=' .env || set_env HTTPS_PORT 443
+# The phone UI is a separate front end on its own port. It is baked into the
+# desktop bundle's link at build time, so changing it needs a rebuild - which
+# is exactly what a re-run of this script does.
+grep -q '^PHONE_PORT=' .env || set_env PHONE_PORT 8081
 EFF_PORT="$(get_env HTTP_PORT)"
 EFF_TLS_PORT="$(get_env HTTPS_PORT)"
 mkdir -p certs

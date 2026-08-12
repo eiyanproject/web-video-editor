@@ -8,6 +8,9 @@ import SegmentList from './SegmentList'
 import ExportPanel from './ExportPanel'
 import Batch from './Batch'
 import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise, cutCost } from './segments'
+import {
+  type Entry, fmtSize, fmtDate, parseTimecode, fmtTimecode, displayAspect, PHONE_PORT,
+} from './lib/shared'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -15,42 +18,7 @@ import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe
 // PLAN.md 3.3: every capability gets a visible control. Nothing here is
 // reachable only by dragging, typing a path, or knowing a shortcut.
 
-type Entry = {
-  name: string
-  abs: string
-  is_dir: boolean
-  size: number
-  mtime: number
-  is_video: boolean
-  problem?: string
-}
-
 type SortKey = 'name' | 'mtime' | 'size'
-
-const fmtSize = (n: number) => {
-  if (!n) return ''
-  const u = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(n) / Math.log(1024))
-  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`
-}
-
-const fmtDate = (ts: number) =>
-  ts ? new Date(ts * 1000).toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' }) : ''
-
-/** Accepts `1:02:03.500`, `02:03.5`, or plain seconds. Returns null if it is
- *  not a time at all, so a typo does not silently seek to zero. */
-function parseTimecode(s: string): number | null {
-  const str = s.trim()
-  if (!str) return null
-  if (/^\d+(\.\d+)?$/.test(str)) return parseFloat(str)
-  const m = str.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
-  if (!m) return null
-  const h = m[1] ? parseInt(m[1], 10) : 0
-  const min = parseInt(m[2], 10)
-  const sec = parseFloat(m[3])
-  if (min > 59 || sec >= 60) return null
-  return h * 3600 + min * 60 + sec
-}
 
 // Timecode spinner.
 //
@@ -99,34 +67,6 @@ const FIELD_OF: Record<number, [number, number]> = {
 /** Strips anything that is not part of a timecode. Guards paste and IME input. */
 function sanitiseTimecode(v: string): string {
   return v.replace(/[^0-9:.]/g, '').slice(0, 12)
-}
-
-// HH:MM:SS.mmm — millisecond precision, which is what a cut point needs.
-const fmtTimecode = (t: number) => {
-  if (!isFinite(t) || t < 0) t = 0
-  const h = Math.floor(t / 3600)
-  const m = Math.floor((t % 3600) / 60)
-  const s = Math.floor(t % 60)
-  const ms = Math.round((t - Math.floor(t)) * 1000)
-  const p = (n: number, w = 2) => String(n).padStart(w, '0')
-  return `${p(h)}:${p(m)}:${p(s)}.${p(ms, 3)}`
-}
-
-/**
- * Display aspect of a clip, honouring non-square pixels.
- *
- * Stored width over height is not the shape you see: a 854x480 file with a
- * 1280:1281 sample aspect displays as 16:9. Portrait phone footage is the case
- * that makes this visible - forcing everything into a 16:9 box would show it as
- * a sliver between two black slabs.
- */
-function displayAspect(p: { width: number; height: number; sar?: string } | null): number | null {
-  if (!p?.width || !p?.height) return null
-  let num = 1, den = 1
-  const m = (p.sar ?? '').match(/^(\d+):(\d+)$/)
-  if (m) { num = Number(m[1]); den = Number(m[2]) }
-  if (!num || !den) { num = 1; den = 1 }
-  return (p.width * num) / (p.height * den)
 }
 
 function describeMediaError(v: HTMLVideoElement): string {
@@ -215,6 +155,7 @@ function beginSplitDrag(
 
 const LAST_DIR = 'veditor.lastDir'
 const SESSION = 'veditor.session'
+const PHONE_HINT_OFF = 'veditor.phoneHintOff'
 
 type Session = {
   selected?: Entry | null
@@ -254,6 +195,24 @@ export default function App() {
   const [pasted, setPasted] = useState('')
   const [showPaste, setShowPaste] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+
+  // Whether to offer the phone UI. Deliberately NOT used to change any layout -
+  // the two front ends stay separate and this only decides whether to show a
+  // link. Coarse pointer AND a narrow window, so a small desktop window on a
+  // mouse does not get nagged.
+  const [showPhoneHint, setShowPhoneHint] = useState(false)
+  useEffect(() => {
+    if (localStorage.getItem(PHONE_HINT_OFF) === '1') return
+    const mq = window.matchMedia('(max-width: 820px) and (pointer: coarse)')
+    const sync = () => setShowPhoneHint(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  const dismissPhoneHint = () => {
+    setShowPhoneHint(false)
+    try { localStorage.setItem(PHONE_HINT_OFF, '1') } catch { /* private mode */ }
+  }
   // Which pane the keyboard is driving. Kept in state, not just a ref,
   // because an invisible mode is a trap - the panes show which one is live.
   const [activePane, setActivePane] = useState<'editor' | 'preview'>('editor')
@@ -1194,6 +1153,34 @@ export default function App() {
 
   return (
     <div className="flex h-full w-full flex-col">
+      {/* Opening the desktop URL on a phone is the common mistake - it is the
+          address people bookmark and send to themselves. The 📱 button in the
+          header is not enough on its own: at phone width that row already
+          overflows, so the one control that would rescue you is the one
+          scrolled out of sight. This says it once, plainly, and remembers
+          being dismissed. */}
+      {showPhoneHint && (
+        <div className="flex items-center gap-3 border-b border-indigo-400/30 bg-indigo-500/15 px-3 py-2">
+          <div className="min-w-0 flex-1 text-xs leading-relaxed text-white/75">
+            <span className="font-medium">This is the desktop editor.</span>{' '}
+            There is a version built for touch.
+          </div>
+          <button
+            onClick={() => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_self')}
+            className="min-h-[44px] shrink-0 rounded-lg bg-indigo-500 px-4 text-sm font-medium text-white"
+          >
+            📱 Open it
+          </button>
+          <button
+            onClick={dismissPhoneHint}
+            title="Stay on the desktop editor"
+            className="min-h-[44px] shrink-0 rounded-lg px-3 text-white/50"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {showHelp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
           onClick={() => setShowHelp(false)}>
@@ -1287,6 +1274,14 @@ export default function App() {
               Batch remux
             </button>
             <div className="flex-1" />
+            {/* Same host, different port: the phone UI is a separate front end,
+                so this is a plain link rather than a route. Built from the
+                current hostname so it works over the LAN, where the phone
+                actually is, instead of pointing at localhost. */}
+            <Btn title={`Open the phone UI (port ${PHONE_PORT}) — scan or send this to your phone`}
+              onClick={() => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener')}>
+              📱 Phone
+            </Btn>
             <Btn title="Keyboard shortcuts (?)" onClick={() => setShowHelp(true)}>⌨ ?</Btn>
             <Btn title="Show the application log: mounts, saves, errors" onClick={() => setPage('logs')}>📋 Log</Btn>
             <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>

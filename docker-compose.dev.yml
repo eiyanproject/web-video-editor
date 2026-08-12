@@ -70,6 +70,28 @@ services:
     depends_on:
       - api
 
+  # The phone front end, on its own port. Point a phone on the LAN at
+  # http://<this-machine>:5274 - the desktop UI's 📱 button links straight to it.
+  #
+  # Shares the node_modules volume with `ui` but must NOT run npm install too:
+  # two installs into one volume race. It waits for `ui` to finish instead.
+  ui-phone:
+    image: node:22-alpine
+    container_name: wve-ui-phone-dev
+    working_dir: /app
+    command: sh -c "until [ -x node_modules/.bin/vite ]; do sleep 2; done && npm run dev:phone"
+    volumes:
+      - ./ui:/app
+      - veditor-node:/app/node_modules
+    ports:
+      - "5274:5274"
+    environment:
+      VITE_API_TARGET: "http://api:8080"
+    mem_limit: 512m
+    depends_on:
+      - api
+      - ui
+
 volumes:
   veditor-cargo:
   veditor-target:

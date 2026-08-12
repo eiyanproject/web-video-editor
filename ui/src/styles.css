@@ -4,3 +4,8 @@
 
 html, body, #root { height: 100%; }
 body { margin: 0; background: #0f1116; color: #e6e8ee; }
+
+/* The phone's timecode wheels scroll but must not show a bar: at 56px wide a
+   scrollbar is most of the column. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

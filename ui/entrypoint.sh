@@ -94,6 +94,27 @@ $API_BLOCK
 SITE
 )
 
+# ---------------------------------------------------------------- phone site
+# The phone UI is a SEPARATE front end (ui/phone.html), not a responsive mode
+# of the desktop one, so it gets its own port rather than a path: a phone has a
+# bare host:port to type, and nothing done for touch can affect the desktop
+# app. Both come out of the same bundle; only which index.html is served
+# differs.
+PHONE_PORT="${PHONE_PORT:-8081}"
+
+PHONE_BLOCK=$(cat <<PHONE
+    root /usr/share/nginx/html;
+    index phone.html;
+
+    location / {
+        $AUTH_BLOCK
+        try_files \$uri \$uri/ /phone.html;
+    }
+
+$API_BLOCK
+PHONE
+)
+
 {
   echo "server {"
   echo "    listen 80;"
@@ -108,6 +129,12 @@ SITE
     echo "    server_name localhost;"
   fi
   echo "$SITE_BLOCK"
+  echo "}"
+
+  echo "server {"
+  echo "    listen $PHONE_PORT;"
+  echo "    server_name _;"
+  echo "$PHONE_BLOCK"
   echo "}"
 
   if [ "$TLS" = "1" ]; then
