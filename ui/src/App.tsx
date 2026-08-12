@@ -100,6 +100,10 @@ type Session = {
   selected?: Entry | null
   loaded?: Entry | null
   time?: number
+  /** Editor playhead, separate from the preview player's position. */
+  editTime?: number
+  /** Whatever is in the Go-to box, kept so a noted timecode survives a reload. */
+  tcInput?: string
   muted?: boolean
   sortKey?: SortKey
   sortAsc?: boolean
@@ -180,7 +184,8 @@ export default function App() {
     if (t == null) { say('Not a time — try 1:02:03.500, 02:03.5 or 123.4'); return }
     if (t > editDuration) { say(`Beyond the end (${fmtTimecode(editDuration).slice(0, 8)})`); return }
     seek(t)
-    setTcInput('')
+    // Deliberately NOT cleared: a timecode is usually used more than once -
+    // nudged a frame, jumped back to, then cut at. Clearing it means retyping.
   }
 
   // Boundary drags emit continuously; only the final position becomes an undo
@@ -394,22 +399,41 @@ export default function App() {
   // is verified to still exist first: a share that is not mounted yet, or a file
   // that has moved, must not leave a broken player and a dead path on screen.
   const pendingSeek = useRef<{ abs: string; t: number } | null>(null)
+  const pendingEditSeek = useRef<number | null>(null)
+
+  // Nothing may be written until the stored session has been read.
+  //
+  // Without this the writer fires on mount with everything still at its initial
+  // value and flattens the saved position to zero. Under StrictMode the restore
+  // effect then runs a second time and reads back its own zero, so the restore
+  // silently succeeds at restoring nothing.
+  const restoreStarted = useRef(false)
+  const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
+    if (restoreStarted.current) return
+    restoreStarted.current = true
+
     let s: Session
     try {
       const raw = localStorage.getItem(SESSION)
-      if (!raw) return
+      if (!raw) { setHydrated(true); return }
       s = JSON.parse(raw)
-    } catch { return }
+    } catch { setHydrated(true); return }
 
     if (s.muted != null) setMuted(s.muted)
+    if (s.tcInput) setTcInput(s.tcInput)
+    if (s.editTime != null) pendingEditSeek.current = s.editTime
     if (s.sortKey) setSortKey(s.sortKey)
     if (s.sortAsc != null) setSortAsc(s.sortAsc)
     if (s.showAll != null) setShowAll(s.showAll)
 
     const sel = s.selected
-    if (!sel?.abs) return
+    if (!sel?.abs) {
+      if (s.loaded?.abs) setLoaded(s.loaded)
+      setHydrated(true)
+      return
+    }
     fetch(`/api/resolve?path=${encodeURIComponent(sel.abs)}`)
       .then((r) => {
         if (!r.ok) throw new Error('gone')
@@ -422,15 +446,19 @@ export default function App() {
         // every cold start when a share is simply not up yet would be noise.
         try { localStorage.removeItem(SESSION) } catch { /* ignore */ }
       })
+      .finally(() => setHydrated(true))
   }, [])
 
   // Latest values for the periodic writer, so playback position is saved
   // without re-registering a timer four times a second.
   const sessionRef = useRef<Session>({})
-  sessionRef.current = { selected, loaded, time: curTime, muted, sortKey, sortAsc, showAll }
+  sessionRef.current = { selected, loaded, time: curTime, editTime, tcInput, muted, sortKey, sortAsc, showAll }
   const writeSession = () => {
+    if (!hydratedRef.current) return
     try { localStorage.setItem(SESSION, JSON.stringify(sessionRef.current)) } catch { /* quota */ }
   }
+  const hydratedRef = useRef(false)
+  hydratedRef.current = hydrated
 
   useEffect(() => {
     window.addEventListener('beforeunload', writeSession)
@@ -443,9 +471,10 @@ export default function App() {
   // seeking changes the bucket. Debouncing would be wrong here - during
   // continuous playback it never settles, so it would never write at all.
   const timeBucket = Math.floor(curTime / 3)
+  const editBucket = Math.floor(editTime / 3)
   useEffect(() => {
     writeSession()
-  }, [timeBucket, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
+  }, [hydrated, timeBucket, editBucket, tcInput, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
 
   useEffect(() => {
     const last = localStorage.getItem(LAST_DIR)
@@ -594,23 +623,51 @@ export default function App() {
                   {loaded.name}
                 </div>
 
-                {/* The editor's own feed. Independent playhead from the preview
-                    on the right, so finding a file and cutting one are separate
-                    activities that do not fight over the same player. */}
-                <div className="aspect-video w-full shrink-0 bg-black">
-                  <video
-                    ref={editVideoRef}
-                    key={loaded.abs}
-                    src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
-                    controls
-                    preload="metadata"
-                    className="h-full w-full"
-                    onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
-                    onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
-                  />
+                {/* Movavi layout: preview on the left, segment list down the
+                    right, timeline spanning the bottom. */}
+                <div className="flex min-h-0 flex-1">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    {/* The editor's own feed and playhead, entirely separate
+                        from the preview player on the right of the app. */}
+                    <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+                      <video
+                        ref={editVideoRef}
+                        key={loaded.abs}
+                        src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
+                        controls
+                        preload="metadata"
+                        className="max-h-full max-w-full"
+                        onLoadedMetadata={() => {
+                          const v = editVideoRef.current
+                          const t = pendingEditSeek.current
+                          if (v && t != null && t > 1 && t < (v.duration || 0)) {
+                            v.currentTime = t
+                            setEditTime(t)
+                          }
+                          pendingEditSeek.current = null
+                        }}
+                        onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
+                        onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex w-[44%] min-w-[240px] flex-col border-l border-white/10">
+                    <SegmentList
+                      segs={segs}
+                      duration={editDuration}
+                      keyframes={keyframes}
+                      fps={fps}
+                      selectedId={selectedSeg}
+                      onSelect={setSelectedSeg}
+                      onToggle={(id) => apply((cur) => toggleKeep(cur, id))}
+                      onSeek={seek}
+                      onMerge={(i) => apply((cur) => mergeAt(cur, i))}
+                    />
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-1 border-t border-white/10 px-2 py-1.5 text-xs">
                   <Btn title="Cut at the playhead (S)" tone="accent" onClick={splitHere}>✂ Cut here</Btn>
                   <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
                   <div className="mx-1 h-4 w-px bg-white/15" />
@@ -639,7 +696,7 @@ export default function App() {
                     onClick={() => {
                       const t = parseTimecode(tcInput)
                       if (t == null || t > editDuration) { say('Not a valid time for this clip'); return }
-                      seek(t); apply((cur) => splitAt(cur, t)); setTcInput('')
+                      seek(t); apply((cur) => splitAt(cur, t))
                       say(`Cut at ${fmtTimecode(t).slice(0, 8)}`)
                     }}>✂ Cut at time</Btn>
                   <div className="flex-1" />
@@ -672,17 +729,14 @@ export default function App() {
                   <span className="text-white/20">S cut · Del keep/drop · , . frame · Space play</span>
                 </div>
 
-                <SegmentList
-                  segs={segs}
-                  duration={editDuration}
-                  keyframes={keyframes}
-                  fps={fps}
-                  selectedId={selectedSeg}
-                  onSelect={setSelectedSeg}
-                  onToggle={(id) => apply((cur) => toggleKeep(cur, id))}
-                  onSeek={seek}
-                  onMerge={(i) => apply((cur) => mergeAt(cur, i))}
-                />
+                {/* Reserved for Phase 3: output container, merge vs separate
+                    files, destination and the Convert button. */}
+                <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] text-white/30">
+                  <span className="text-white/45">Export</span>
+                  <span>merge or separate files · container remux · destination</span>
+                  <div className="flex-1" />
+                  <span className="rounded bg-white/10 px-2 py-0.5">Phase 3</span>
+                </div>
               </>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-sm text-white/30">
@@ -750,15 +804,11 @@ export default function App() {
             </div>
           )}
 
+          {/* Fully independent of the editor's player, including when it is the
+              same file: browsing and cutting are different jobs with different
+              playheads, and sharing one element makes both worse. */}
           <div className="aspect-video w-full bg-black">
-            {selected && loaded?.abs === selected.abs ? (
-              // Same clip is open in the editor. Streaming it twice would pull
-              // the file over the network twice for no benefit.
-              <div className="flex h-full flex-col items-center justify-center gap-1 text-xs text-white/35">
-                <div>Playing in the editor →</div>
-                <div className="text-white/20">left pane has the feed and the timeline</div>
-              </div>
-            ) : srcUrl ? (
+            {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
                 onLoadedMetadata={() => {

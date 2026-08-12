@@ -243,6 +243,10 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
     that is not mounted yet, must not leave a broken player and a dead path on screen —
     the session is silently forgotten instead. Announcing "the file you had open is
     missing" on every cold start before a NAS wakes up would be noise, not information.
+  - **Nothing is written until the stored session has been read.** Without that gate the
+    writer fires on mount with every value still at its initial zero and flattens the
+    saved position; under StrictMode the restore effect then runs again, reads back its
+    own zero, and silently succeeds at restoring nothing.
   - Position is throttled by a **coarse bucket of the playhead**, not a timer. A timer
     closure reads stale state, and `timeupdate` never fires while paused; a bucket
     derived from React state cannot go stale and still captures seeks on a paused clip.
@@ -275,15 +279,20 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
   buttons. Millisecond precision because that is what a cut point needs, and copying is
   preferred over saving stills: anything written to the browser's download folder lands
   somewhere the app does not manage and the user did not choose (§3.5).
-- **The editor has its own video feed and its own playhead**, independent of the preview
-  player on the right. Finding a file and cutting one are separate activities and should
-  not fight over a single element. When the same clip is open in both, the right pane
-  steps aside rather than opening a second stream — pulling a multi-gigabyte file across
-  the network twice for one picture would be indefensible.
+- **The editor has its own video feed and its own playhead**, fully independent of the
+  preview player on the right — including when both hold the same file. Finding a clip
+  and cutting one are different jobs with different positions; sharing an element makes
+  both worse.
+- **Layout follows the reference**: preview upper-left, segment list down the right of
+  the editor pane, timeline spanning the bottom, and an export strip beneath it. The
+  preview is deliberately small — the timeline and the segment list are what you look at
+  while cutting.
 - **Typed timecode.** A mouse cannot land on a chosen frame of a two-hour clip, and cut
   points often come from notes. The box accepts `1:02:03.500`, `02:03.5` or plain
   seconds, refuses anything else rather than silently seeking to zero, and offers
-  *Cut at time* and *Nearest keyframe* beside it.
+  *Cut at time* and *Nearest keyframe* beside it. The box is **not** cleared after use
+  and survives a reload: a timecode is typically used several times — nudged a frame,
+  returned to, then cut at — and retyping it each time is the whole problem it solves.
 - **Preview surface** with the current frame, plus transport controls: jump-to-start,
   frame-back, play/pause, frame-forward, jump-to-end. Screenshot-to-PNG and mute
   buttons on the left, matching the reference.
