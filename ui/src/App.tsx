@@ -7,7 +7,7 @@ import Timeline from './Timeline'
 import SegmentList from './SegmentList'
 import ExportPanel from './ExportPanel'
 import Batch from './Batch'
-import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise } from './segments'
+import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise, cutCost } from './segments'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
 // paste anything the container can see and it opens.
@@ -991,6 +991,9 @@ export default function App() {
                   outputDir={outputDir}
                   onSetOutputDir={setOutputDir}
                   onToast={say}
+                  canExact={!!loadedProbe?.smartcut_ok}
+                  reencodeSecs={segs.slice(0, -1).reduce((n, s) =>
+                    n + cutCost(s.end, keyframes, fps).reencode, 0)}
                 />
               </>
             ) : (

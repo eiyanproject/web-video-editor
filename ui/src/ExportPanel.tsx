@@ -30,18 +30,24 @@ const tc = (t: number) => {
 }
 
 export default function ExportPanel({
-  source, segs, outputDir, onSetOutputDir, onToast,
+  source, segs, outputDir, onSetOutputDir, onToast, canExact = true, reencodeSecs = 0,
 }: {
   source: string
   segs: Segment[]
   outputDir: string
   onSetOutputDir: (d: string) => void
   onToast: (m: string) => void
+  /// False when the clip cannot be frame-exact cut (VFR, or a codec with no
+  /// MPEG-TS route). The toggle then explains itself instead of silently lying.
+  canExact?: boolean
+  /// Seconds that frame-exact mode would rebuild, for the label.
+  reencodeSecs?: number
 }) {
   const [mode, setMode] = useState<'merge' | 'separate' | 'separate_merge'>('merge')
   const [showPicker, setShowPicker] = useState(false)
   const [container, setContainer] = useState('')
   const [overwrite, setOverwrite] = useState(false)
+  const [exact, setExact] = useState(true)
   const [jobs, setJobs] = useState<Job[]>([])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -72,7 +78,7 @@ export default function ExportPanel({
         body: JSON.stringify({
           source,
           segments: kept.map((s) => ({ start: s.start, end: s.end })),
-          mode, container, output_dir: outputDir, overwrite,
+          mode, container, output_dir: outputDir, overwrite, exact: exact && canExact,
         }),
       })
       const d = await r.json()
@@ -125,6 +131,16 @@ export default function ExportPanel({
           className="min-w-0 flex-1 rounded bg-white/10 px-2 py-0.5 font-mono outline-none placeholder:font-sans placeholder:text-white/25"
         />
 
+        <label
+          className={`flex shrink-0 items-center gap-1 ${canExact ? 'text-white/70' : 'text-white/30'}`}
+          title={canExact
+            ? `Cut exactly where you asked, rebuilding only the partial GOP at each boundary${reencodeSecs > 0 ? ` (about ${reencodeSecs.toFixed(1)}s of video)` : ''}. Turn it off to snap cuts onto keyframes instead - faster, pure copy, but the cut moves.`
+            : 'Not available for this clip: frame-exact needs a constant frame rate and a codec with an MPEG-TS route. Cuts will snap to keyframes.'}>
+          <input type="checkbox" checked={exact && canExact} disabled={!canExact}
+            onChange={(e) => setExact(e.target.checked)} />
+          frame-exact{exact && canExact && reencodeSecs > 0 ? ` (${reencodeSecs.toFixed(1)}s)` : ''}
+        </label>
+
         <label className="flex shrink-0 items-center gap-1 text-white/45" title="Replace a file of the same name">
           <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
           overwrite
@@ -144,6 +160,12 @@ export default function ExportPanel({
           jobs{done.length ? ` (${done.length})` : ''}
         </button>
       </div>
+
+      {exact && canExact && mode === 'separate' && (
+        <div className="border-t border-white/10 px-3 py-1 text-[10px] text-amber-300/70">
+          Frame-exact applies to joined output. Separate files still snap to keyframes.
+        </div>
+      )}
 
       {err && (
         <div className="border-t border-red-400/30 bg-red-500/15 px-3 py-1.5 text-[11px] text-red-100">{err}</div>

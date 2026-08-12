@@ -45,6 +45,77 @@ pub struct ExportRequest {
     /// Overwrite an existing output instead of refusing.
     #[serde(default)]
     pub overwrite: bool,
+    /// Frame-exact cutting: re-encode the partial GOP at each boundary instead
+    /// of snapping the cut onto a keyframe.
+    #[serde(default)]
+    pub exact: bool,
+}
+
+// ---------------------------------------------------------------- smart-cut
+
+/// One piece of the output: either copied verbatim or rebuilt.
+#[derive(Debug, Clone)]
+enum Piece {
+    /// Stream-copied straight from the source. The overwhelming majority.
+    Copy { start: f64, end: f64 },
+    /// Re-encoded because the boundary falls mid-GOP. Seconds at most.
+    Encode { start: f64, end: f64 },
+}
+
+impl Piece {
+    fn span(&self) -> f64 {
+        match self {
+            Piece::Copy { start, end } | Piece::Encode { start, end } => end - start,
+        }
+    }
+}
+
+/// Splits one kept segment into copy and re-encode pieces.
+///
+/// A cut can only be stream-copied from a keyframe, so the head of a segment
+/// that starts mid-GOP has to be rebuilt up to the next keyframe; likewise the
+/// tail from the last keyframe to the requested end. Everything between is
+/// copied byte for byte, which is why this stays fast: a two-hour film with
+/// three cuts rebuilds a handful of seconds.
+fn plan_segment(a: f64, b: f64, kf: &[f64], eps: f64) -> Vec<Piece> {
+    if kf.is_empty() {
+        return vec![Piece::Encode { start: a, end: b }];
+    }
+    let k_after = |t: f64| kf.iter().copied().find(|&k| k > t + eps);
+    let k_at_or_before = |t: f64| kf.iter().copied().rev().find(|&k| k <= t + eps);
+
+    let starts_clean = k_at_or_before(a).map(|k| (a - k).abs() <= eps).unwrap_or(false);
+    let a_next = k_after(a);
+    let b_prev = k_at_or_before(b);
+
+    // The whole segment lives inside one GOP: nothing can be copied.
+    match (starts_clean, a_next, b_prev) {
+        (false, Some(next), _) if next >= b - eps => return vec![Piece::Encode { start: a, end: b }],
+        _ => {}
+    }
+
+    let mut out = Vec::new();
+    let body_start = if starts_clean {
+        a
+    } else if let Some(next) = a_next {
+        out.push(Piece::Encode { start: a, end: next });
+        next
+    } else {
+        return vec![Piece::Encode { start: a, end: b }];
+    };
+
+    let body_end = match b_prev {
+        Some(k) if k > body_start + eps => k,
+        _ => b,
+    };
+
+    if body_end > body_start + eps {
+        out.push(Piece::Copy { start: body_start, end: body_end });
+    }
+    if b > body_end + eps {
+        out.push(Piece::Encode { start: body_end, end: b });
+    }
+    out
 }
 
 fn merge() -> String {
@@ -257,6 +328,225 @@ async fn verify(path: &Path, expected: f64) -> (bool, String) {
     }
 }
 
+/// Annex-B bitstream filter needed to put a stream into MPEG-TS.
+fn ts_bsf(codec: &str) -> Option<&'static str> {
+    match codec {
+        "h264" => Some("h264_mp4toannexb"),
+        "hevc" => Some("hevc_mp4toannexb"),
+        _ => None,
+    }
+}
+
+/// Encoder for rebuilding a boundary fragment.
+///
+/// libx264/libx265 rather than QSV even where an iGPU exists: parameter
+/// fidelity (profile, pixel format, colour) is far more predictable on CPU, the
+/// workload is a few seconds of video, and a fragment that does not match its
+/// neighbours is worse than one that took two seconds longer to make.
+fn fragment_encoder(codec: &str) -> Option<&'static str> {
+    match codec {
+        "h264" => Some("libx264"),
+        "hevc" => Some("libx265"),
+        _ => None,
+    }
+}
+
+/// Builds every piece as MPEG-TS, then concatenates.
+///
+/// The spike settled this: joining MP4 fragments through the concat demuxer
+/// produces a file whose stored timestamps look fine but which throws hundreds
+/// of errors on a full decode. MPEG-TS carries SPS/PPS in band for every
+/// fragment, so it tolerates the parameter-set differences between a
+/// freshly-encoded piece and the original stream. Same measurement, three
+/// variants: only the all-TS route decodes clean.
+async fn run_smart_cut(
+    st: &AppState,
+    jobs: &Jobs,
+    id: &str,
+    src: &Path,
+    probe: &media::Probe,
+    segs: &[(f64, f64)],
+    kf: &[f64],
+    tmp: &Path,
+    target: &Path,
+    ext: &str,
+) -> Result<(f64, usize), String> {
+    let _ = st;
+    let eps = if probe.fps > 0.0 { 0.5 / probe.fps } else { 0.02 };
+    let enc = fragment_encoder(&probe.video_codec)
+        .ok_or_else(|| format!("{} cannot be frame-exact cut", probe.video_codec))?;
+    let bsf = ts_bsf(&probe.video_codec)
+        .ok_or_else(|| format!("{} has no MPEG-TS route", probe.video_codec))?;
+
+    let mut pieces: Vec<Piece> = Vec::new();
+    for (a, b) in segs {
+        pieces.extend(plan_segment(*a, *b, kf, eps));
+    }
+    let total: f64 = pieces.iter().map(|p| p.span()).sum();
+    let reencoded: f64 = pieces
+        .iter()
+        .filter(|p| matches!(p, Piece::Encode { .. }))
+        .map(|p| p.span())
+        .sum();
+
+    tracing::info!(
+        "smart-cut: {} piece(s), re-encoding {:.2}s of {:.1}s ({:.2}%)",
+        pieces.len(), reencoded, total,
+        if total > 0.0 { reencoded / total * 100.0 } else { 0.0 }
+    );
+    jobs.set(id, |j| {
+        j.message = format!("frame-exact · rebuilding {reencoded:.1}s of {total:.0}s");
+    })
+    .await;
+
+    tokio::fs::create_dir_all(tmp)
+        .await
+        .map_err(|e| format!("cannot create scratch space: {e}"))?;
+
+    let mut parts: Vec<PathBuf> = Vec::new();
+    let mut done = 0.0f64;
+
+    for (i, piece) in pieces.iter().enumerate() {
+        let part = tmp.join(format!("p{i:04}.ts"));
+        let slice = if total > 0.0 { piece.span() / total * 0.85 } else { 0.0 };
+
+        let args: Vec<String> = match piece {
+            Piece::Copy { start, end } => vec![
+                "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+                "-ss".into(), format!("{start:.4}"),
+                "-i".into(), src.to_string_lossy().to_string(),
+                "-t".into(), format!("{:.4}", end - start),
+                "-c".into(), "copy".into(),
+                "-bsf:v".into(), bsf.into(),
+                // Without this the copied audio runs past the end of the video
+                // in the same piece; concat then starts the next piece after
+                // the longer stream, leaving a gap in the picture. Every piece
+                // must end when its video ends.
+                "-shortest".into(),
+                "-avoid_negative_ts".into(), "make_zero".into(),
+                "-f".into(), "mpegts".into(),
+                "-progress".into(), "pipe:1".into(), "-nostats".into(),
+                part.to_string_lossy().to_string(),
+            ],
+            Piece::Encode { start, end } => {
+                // -ss before -i is frame accurate when transcoding: ffmpeg seeks
+                // to the preceding keyframe then decodes and discards up to the
+                // exact timestamp asked for.
+                let mut v: Vec<String> = vec![
+                    "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+                    "-ss".into(), format!("{start:.4}"),
+                    "-i".into(), src.to_string_lossy().to_string(),
+                    // Frame count, not duration: -t rounding was adding a frame
+                    // at each boundary, and four boundaries is four frames of
+                    // drift for no reason.
+                    "-frames:v".into(),
+                    format!("{}", ((end - start) * probe.fps).round().max(1.0) as i64),
+                    "-c:v".into(), enc.into(),
+                    "-pix_fmt".into(),
+                    if probe.pix_fmt.is_empty() { "yuv420p".into() } else { probe.pix_fmt.clone() },
+                ];
+                if enc == "libx264" {
+                    v.extend(["-crf".into(), "16".into(), "-preset".into(), "medium".into()]);
+                    if !probe.profile.is_empty() {
+                        v.extend(["-profile:v".into(), probe.profile.to_lowercase()]);
+                    }
+                    // Closed GOP with an IDR at the very first frame, so the
+                    // piece can be spliced without borrowing references.
+                    v.extend([
+                        "-x264-params".into(),
+                        "scenecut=0:open-gop=0:min-keyint=1".into(),
+                    ]);
+                } else {
+                    v.extend(["-crf".into(), "18".into(), "-preset".into(), "fast".into()]);
+                    v.extend(["-x265-params".into(), "scenecut=0:open-gop=0".into()]);
+                }
+                if probe.fps > 0.0 {
+                    v.extend(["-r".into(), format!("{:.6}", probe.fps)]);
+                }
+                // Audio is re-encoded in rebuilt fragments, not copied.
+                //
+                // A fragment's video is regenerated and starts at zero, but
+                // copied audio packets keep the source's presentation times. The
+                // join then produced a file whose video ran 119s while its audio
+                // spanned the 360s between the two original cut points. Encoding
+                // the handful of seconds of audio in a fragment keeps the piece
+                // internally consistent; copied pieces are untouched, so this is
+                // still a couple of seconds of audio per cut, not a re-encode.
+                if probe.audio.first().map(|a| a.codec == "aac").unwrap_or(false) {
+                    v.extend([
+                        "-c:a".into(), "aac".into(),
+                        "-b:a".into(), "192k".into(),
+                    ]);
+                } else {
+                    v.extend(["-c:a".into(), "copy".into()]);
+                }
+                v.extend([
+                    "-shortest".into(),
+                    "-avoid_negative_ts".into(), "make_zero".into(),
+                    "-f".into(), "mpegts".into(),
+                    "-progress".into(), "pipe:1".into(), "-nostats".into(),
+                    part.to_string_lossy().to_string(),
+                ]);
+                v
+            }
+        };
+
+        run_ffmpeg(jobs, id, args, done, slice, piece.span()).await?;
+        done += slice;
+        parts.push(part);
+    }
+
+    // Join with the concat PROTOCOL, not the demuxer.
+    //
+    // MPEG-TS is designed to be byte-concatenable: the protocol streams the
+    // pieces together and +genpts rebuilds one continuous timeline. The demuxer
+    // instead positions each file using the previous one's reported duration -
+    // and a TS piece reports its standard 1.4s start offset as part of that, so
+    // every join opened a gap and a 119s cut came out 368s long. Same pieces,
+    // same flags, entirely different result.
+    let part_out = target.with_extension(format!("{ext}.part"));
+    let joined_input = format!(
+        "concat:{}",
+        parts
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+        "-fflags".into(), "+genpts".into(),
+        "-i".into(), joined_input,
+        "-c".into(), "copy".into(),
+        "-avoid_negative_ts".into(), "make_zero".into(),
+        "-max_interleave_delta".into(), "0".into(),
+        "-muxdelay".into(), "0".into(), "-muxpreload".into(), "0".into(),
+    ];
+    if matches!(ext, "mp4" | "m4v" | "mov") {
+        args.push("-movflags".into());
+        args.push("+faststart".into());
+        // Coming out of TS, AAC needs its ADTS framing converted back.
+        if probe.audio.first().map(|a| a.codec == "aac").unwrap_or(false) {
+            args.push("-bsf:a".into());
+            args.push("aac_adtstoasc".into());
+        }
+    }
+    args.push("-f".into()); args.push(muxer_for(ext).into());
+    args.push("-progress".into()); args.push("pipe:1".into());
+    args.push("-nostats".into());
+    args.push(part_out.to_string_lossy().to_string());
+
+    let r = run_ffmpeg(jobs, id, args, 0.85, 0.15, total).await;
+    let _ = tokio::fs::remove_dir_all(tmp).await;
+    r?;
+
+    tokio::fs::rename(&part_out, target)
+        .await
+        .map_err(|_| format!("cannot finalise {}", target.display()))?;
+
+    Ok((total, pieces.iter().filter(|p| matches!(p, Piece::Encode { .. })).count()))
+}
+
 // ---------------------------------------------------------------- the job
 
 async fn run_export(st: AppState, id: String, req: ExportRequest) {
@@ -285,14 +575,34 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
         Err(e) => return fail(format!("cannot read the source: {e:?}")).await,
     };
 
-    // Snap every boundary onto a keyframe. This is what makes the whole export a
-    // pure copy; the UI has already shown the user where these land.
     let kf = media::load_keyframes(&st, &req.source).await.unwrap_or_default();
+
+    // Frame-exact needs a codec with an MPEG-TS route and a constant frame rate;
+    // anything else falls back to snapping rather than producing a bad file.
+    let exact_ok = req.exact
+        && fragment_encoder(&probe.video_codec).is_some()
+        && ts_bsf(&probe.video_codec).is_some()
+        && !probe.vfr
+        && !kf.is_empty();
+    if req.exact && !exact_ok {
+        tracing::warn!(
+            "export {id}: frame-exact unavailable for {} (vfr={}), falling back to keyframe-snap",
+            probe.video_codec, probe.vfr
+        );
+    }
+
     let mut segs = Vec::new();
     let mut notes = Vec::new();
     for s in &req.segments {
-        let a = nearest(s.start, &kf).max(0.0);
-        let b = if (s.end - probe.duration).abs() < 0.05 { s.end } else { nearest(s.end, &kf) };
+        // Exact mode keeps the boundaries the user asked for; snap mode moves
+        // them to the nearest keyframe so everything can be copied.
+        let (a, b) = if exact_ok {
+            (s.start.max(0.0), s.end.min(probe.duration))
+        } else {
+            let a = nearest(s.start, &kf).max(0.0);
+            let b = if (s.end - probe.duration).abs() < 0.05 { s.end } else { nearest(s.end, &kf) };
+            (a, b)
+        };
         if b - a < 0.05 {
             continue;
         }
@@ -344,7 +654,28 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
 
     let mut outputs: Vec<String> = Vec::new();
 
-    let result: Result<(), String> = if req.mode == "separate" || req.mode == "separate_merge" {
+    let result: Result<(), String> = if exact_ok && req.mode != "separate" {
+        // Frame-exact, joined. Separate-file output keeps the snap path for now:
+        // each file would need its own TS pipeline, which is Phase 4 follow-up
+        // work rather than something to half-do here.
+        let target = outdir.join(format!("{stem}_cut.{ext}"));
+        if target.exists() && !req.overwrite {
+            Err(format!("{} already exists", target.display()))
+        } else {
+            let tmp = outdir.join(format!(".{stem}.smartcut"));
+            match run_smart_cut(&st, &jobs, &id, &src, &probe, &segs, &kf, &tmp, &target, &ext).await {
+                Ok((_dur, frags)) => {
+                    tracing::info!("export {id}: frame-exact, {frags} fragment(s) rebuilt");
+                    outputs.push(target.to_string_lossy().to_string());
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&tmp).await;
+                    Err(e)
+                }
+            }
+        }
+    } else if req.mode == "separate" || req.mode == "separate_merge" {
         let mut acc = Ok(());
         for (i, (a, b)) in segs.iter().enumerate() {
             let target = outdir.join(format!("{stem}_seg{:02}.{ext}", i + 1));

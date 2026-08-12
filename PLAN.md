@@ -104,6 +104,25 @@ Ship with copy as the default; expose the toggle in export settings.
 
 ### 2.5 Concatenation — two-tier strategy
 
+> **Measured outcome (Phase 4).** The tier ordering below was **backwards**. Three
+> variants were built from identical fragments and measured: joining MP4 fragments
+> through the concat demuxer produced stored timestamps that looked perfect (zero
+> non-monotonic DTS) yet threw 370+ errors on a full decode — with or without
+> timestamp-repair flags. Only the all-MPEG-TS route decoded clean. **The TS pipeline
+> is the primary path**, and it must use the concat *protocol*, not the concat
+> demuxer: the demuxer positions each file using the previous one's reported duration,
+> and a TS piece reports its standard 1.4 s start offset as part of that, so every join
+> opened a gap and a 119 s cut came out 368 s long.
+>
+> Two further findings, both from measurement rather than reasoning:
+> * Fragments must be driven by `-frames:v`, not `-t`. Duration rounding added one
+>   frame per boundary — four boundaries, four frames of drift.
+> * Audio in a **rebuilt** fragment must be re-encoded, not copied. The fragment's video
+>   is regenerated from zero while copied audio packets keep the source's presentation
+>   times, so the output's video ran 119 s while its audio spanned the 360 s between the
+>   original cut points. Copied pieces keep their audio untouched, so this is a couple of
+>   seconds of audio per cut, not a re-encode.
+
 **Tier 1 (fast path, one write):** the concat demuxer can reference byte ranges of the
 original file directly via `inpoint`/`outpoint`, so the big copied middle sections are
 *never materialized to disk*. Only the tiny encoded fragments become temp files.

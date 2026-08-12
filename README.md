@@ -25,7 +25,7 @@ The timeline also draws **keyframe tick marks**, and each cut point is labelled 
 
 ## Status
 
-**Phase 3 complete.** End to end: browse an SMB share, cut a clip on a zoomable timeline
+**Phase 4 complete.** End to end: browse an SMB share, cut a clip on a zoomable timeline
 with keyframe ticks, drop what you don't want, and export — merged or as separate files,
 optionally into a different container — as a pure stream copy. Cut lists are saved back
 to the share so reopening a clip brings its cuts with it.
@@ -36,7 +36,7 @@ to the share so reopening a clip brings its cuts with it.
 | 1 · ffprobe cache, keyframe index, sprite scrubbing, integrity checks | ✅ done |
 | 2 · segment model, canvas timeline, frame-accurate stepping, drag & drop | ✅ done |
 | 3 · export engine (keyframe-snap), remux incl. MPEG-TS → MP4, saved edits | ✅ done |
-| 4 · smart-cut (frame-exact) | algorithm validated in [`spike/`](spike/) |
+| 4 · smart-cut (frame-exact) | ✅ done |
 | 5 · preview transcode, waveform, batch queue, presets | |
 
 Phase 3 is the point where it replaces a desktop editor for the job. Phase 4 is what
