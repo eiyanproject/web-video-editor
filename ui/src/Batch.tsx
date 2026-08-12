@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import FolderPicker from './FolderPicker'
 
 // Batch container conversion. No player and no timeline: this is for whole
@@ -54,10 +54,29 @@ export default function Batch({ onClose }: { onClose: () => void }) {
     finally { setLoading(false) }
   }
 
+  // Shares the one export folder setting with the editor and Settings, and
+  // writes changes back so the three never drift apart.
+  const serverOutputDir = useRef<string | null>(null)
   useEffect(() => {
-    fetch('/api/settings').then((r) => r.json()).then((d) => setOutputDir(d.output_dir ?? '')).catch(() => {})
+    fetch('/api/settings').then((r) => r.json()).then((d) => {
+      serverOutputDir.current = d.output_dir ?? ''
+      setOutputDir(d.output_dir ?? '')
+    }).catch(() => {})
     open(localStorage.getItem('veditor.batchDir') || '')
   }, [])
+
+  useEffect(() => {
+    if (serverOutputDir.current === null || outputDir === serverOutputDir.current) return
+    const t = setTimeout(() => {
+      fetch('/api/settings', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ output_dir: outputDir }),
+      })
+        .then(() => { serverOutputDir.current = outputDir })
+        .catch(() => {})
+    }, 800)
+    return () => clearTimeout(t)
+  }, [outputDir])
 
   const refresh = async () => {
     try { setJobs(await (await fetch('/api/jobs')).json()) } catch { /* transient */ }

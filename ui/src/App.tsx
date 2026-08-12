@@ -507,15 +507,36 @@ export default function App() {
 
   // Reopen wherever you were last time. Falls back to the roots list if that
   // folder has gone away, e.g. a share that is not mounted yet.
+  // The export folder is one setting shared by the Settings page and the export
+  // panel. Whichever edits it wins, and the other must see it - previously the
+  // panel kept a private copy that was never written back, so the two drifted.
+  const serverOutputDir = useRef<string | null>(null)
+
   const loadRoots = () =>
     fetch('/api/settings')
       .then((r) => r.json())
       .then((d) => {
         setRoots(d.roots ?? [])
+        serverOutputDir.current = d.output_dir ?? ''
         setOutputDir(d.output_dir ?? '')
         setAutosave(d.autosave_edits ?? true)
       })
       .catch(() => {})
+
+  // Persist an export folder typed into the panel, debounced. Guarded against
+  // echoing back what the server just sent us.
+  useEffect(() => {
+    if (serverOutputDir.current === null || outputDir === serverOutputDir.current) return
+    const t = setTimeout(() => {
+      fetch('/api/settings', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ output_dir: outputDir }),
+      })
+        .then(() => { serverOutputDir.current = outputDir })
+        .catch(() => {})
+    }, 800)
+    return () => clearTimeout(t)
+  }, [outputDir])
 
   useEffect(() => { loadRoots() }, [])
 
@@ -703,7 +724,7 @@ export default function App() {
   if (page === 'batch') return <Batch onClose={() => setPage('edit')} />
   if (page === 'settings')
     return <Settings startWithShare={wantShare}
-      onClose={() => { setWantShare(false); setPage('edit'); openDir('') }} />
+      onClose={() => { setWantShare(false); setPage('edit'); loadRoots(); openDir('') }} />
 
   return (
     <div className="flex h-full w-full flex-col">

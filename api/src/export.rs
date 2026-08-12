@@ -431,8 +431,16 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
                         Err(e) => { let _ = tokio::fs::remove_file(&part).await; acc = Err(e); }
                         Ok(()) => {
                             if tokio::fs::rename(&part, &joined).await.is_ok() {
-                                // Joined file first: it is what was asked for.
-                                outputs.insert(0, joined.to_string_lossy().to_string());
+                                // The per-segment files were a means to an end -
+                                // this mode exists because joining complete files
+                                // is more reliable, not because anyone wants the
+                                // pieces. Only delete them once the join has
+                                // actually succeeded.
+                                for f in &outputs {
+                                    let _ = tokio::fs::remove_file(f).await;
+                                }
+                                outputs.clear();
+                                outputs.push(joined.to_string_lossy().to_string());
                             } else {
                                 acc = Err(format!("cannot finalise {}", joined.display()));
                             }

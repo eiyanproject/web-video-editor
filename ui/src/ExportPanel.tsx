@@ -101,7 +101,7 @@ export default function ExportPanel({
           {([
             ['merge', 'single file', 'One file, joined directly from the source in a single pass. Fastest.'],
             ['separate', 'separate files', 'One file per kept segment, nothing joined.'],
-            ['separate_merge', 'separate + joined', 'Writes each segment as its own complete file, then joins those into one. Slower and uses more disk, but far more robust - use this when a single-file export comes out wrong.'],
+            ['separate_merge', 'safe join', 'Writes each segment as its own complete file, joins those into one, then removes the pieces - you get a single file. Slower and needs temporary space, but far more robust than joining in one pass: use this when a single-file export comes out wrong.'],
           ] as const).map(([m, label, tip]) => (
             <button key={m} onClick={() => setMode(m)} title={tip}
               className={`px-2 py-0.5 ${mode === m ? 'bg-indigo-500/70 text-white' : 'hover:bg-white/10'}`}>
