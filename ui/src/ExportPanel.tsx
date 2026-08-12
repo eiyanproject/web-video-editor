@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import FolderPicker from './FolderPicker'
 import type { Segment } from './segments'
 
 export type Job = {
@@ -37,7 +38,8 @@ export default function ExportPanel({
   onSetOutputDir: (d: string) => void
   onToast: (m: string) => void
 }) {
-  const [mode, setMode] = useState<'merge' | 'separate'>('merge')
+  const [mode, setMode] = useState<'merge' | 'separate' | 'separate_merge'>('merge')
+  const [showPicker, setShowPicker] = useState(false)
   const [container, setContainer] = useState('')
   const [overwrite, setOverwrite] = useState(false)
   const [jobs, setJobs] = useState<Job[]>([])
@@ -96,11 +98,14 @@ export default function ExportPanel({
         <span className="font-medium text-white/60">Export</span>
 
         <div className="flex overflow-hidden rounded border border-white/15">
-          {(['merge', 'separate'] as const).map((m) => (
-            <button key={m} onClick={() => setMode(m)}
-              title={m === 'merge' ? 'One file with the kept parts joined' : 'One file per kept segment'}
+          {([
+            ['merge', 'single file', 'One file, joined directly from the source in a single pass. Fastest.'],
+            ['separate', 'separate files', 'One file per kept segment, nothing joined.'],
+            ['separate_merge', 'separate + joined', 'Writes each segment as its own complete file, then joins those into one. Slower and uses more disk, but far more robust - use this when a single-file export comes out wrong.'],
+          ] as const).map(([m, label, tip]) => (
+            <button key={m} onClick={() => setMode(m)} title={tip}
               className={`px-2 py-0.5 ${mode === m ? 'bg-indigo-500/70 text-white' : 'hover:bg-white/10'}`}>
-              {m === 'merge' ? 'single file' : 'separate files'}
+              {label}
             </button>
           ))}
         </div>
@@ -111,6 +116,8 @@ export default function ExportPanel({
           {CONTAINERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
         </select>
 
+        <button onClick={() => setShowPicker(true)} title="Browse for the output folder"
+          className="shrink-0 rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">📂</button>
         <input
           value={outputDir}
           onChange={(e) => onSetOutputDir(e.target.value)}
@@ -174,6 +181,15 @@ export default function ExportPanel({
           <button onClick={async () => { await fetch('/api/jobs/clear', { method: 'POST' }); refresh() }}
             className="mt-1 rounded px-1 text-white/25 hover:bg-white/10 hover:text-white/60">clear finished</button>
         </div>
+      )}
+
+      {showPicker && (
+        <FolderPicker
+          title="Choose the export folder"
+          initial={outputDir}
+          onClose={() => setShowPicker(false)}
+          onPick={(p) => { onSetOutputDir(p); setShowPicker(false) }}
+        />
       )}
 
       {/* Where the cuts will actually land once snapped to keyframes. */}

@@ -344,7 +344,7 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
 
     let mut outputs: Vec<String> = Vec::new();
 
-    let result: Result<(), String> = if req.mode == "separate" {
+    let result: Result<(), String> = if req.mode == "separate" || req.mode == "separate_merge" {
         let mut acc = Ok(());
         for (i, (a, b)) in segs.iter().enumerate() {
             let target = outdir.join(format!("{stem}_seg{:02}.{ext}", i + 1));
@@ -385,6 +385,62 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
                 break;
             }
             outputs.push(target.to_string_lossy().to_string());
+        }
+
+        // "separate_merge": join the finished pieces afterwards.
+        //
+        // A direct concat of byte ranges from one source is faster, but it asks
+        // the muxer to stitch across discontinuities in a single pass, and some
+        // files come out wrong that way. Writing each piece as a complete,
+        // independently valid file and then joining those is slower and uses
+        // more disk, but it is markedly more robust - which is exactly the
+        // fallback to reach for when a single-file export misbehaves.
+        if acc.is_ok() && req.mode == "separate_merge" && outputs.len() > 1 {
+            let joined = outdir.join(format!("{stem}_joined.{ext}"));
+            if joined.exists() && !req.overwrite {
+                acc = Err(format!("{} already exists", joined.display()));
+            } else {
+                let list = outdir.join(format!(".{stem}.join.txt"));
+                let body: String = outputs
+                    .iter()
+                    .map(|o| format!("file '{}'\n", o.replace('\'', "'\\''")))
+                    .collect();
+                if tokio::fs::write(&list, body).await.is_err() {
+                    acc = Err("cannot write the join list".into());
+                } else {
+                    let part = joined.with_extension(format!("{ext}.part"));
+                    let mut args: Vec<String> = vec![
+                        "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+                        "-fflags".into(), "+genpts".into(),
+                        "-f".into(), "concat".into(), "-safe".into(), "0".into(),
+                        "-i".into(), list.to_string_lossy().to_string(),
+                        "-c".into(), "copy".into(),
+                        "-avoid_negative_ts".into(), "make_zero".into(),
+                        "-max_interleave_delta".into(), "0".into(),
+                        "-muxdelay".into(), "0".into(), "-muxpreload".into(), "0".into(),
+                    ];
+                    if matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
+                        args.push("-movflags".into()); args.push("+faststart".into());
+                    }
+                    args.push("-f".into()); args.push(muxer_for(&ext).into());
+                    args.push("-progress".into()); args.push("pipe:1".into());
+                    args.push("-nostats".into());
+                    args.push(part.to_string_lossy().to_string());
+
+                    match run_ffmpeg(&jobs, &id, args, 0.9, 0.1, total).await {
+                        Err(e) => { let _ = tokio::fs::remove_file(&part).await; acc = Err(e); }
+                        Ok(()) => {
+                            if tokio::fs::rename(&part, &joined).await.is_ok() {
+                                // Joined file first: it is what was asked for.
+                                outputs.insert(0, joined.to_string_lossy().to_string());
+                            } else {
+                                acc = Err(format!("cannot finalise {}", joined.display()));
+                            }
+                        }
+                    }
+                    let _ = tokio::fs::remove_file(&list).await;
+                }
+            }
         }
         acc
     } else {
@@ -462,6 +518,7 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
             let expected = if req.mode == "separate" {
                 segs.first().map(|(a, b)| b - a).unwrap_or(total)
             } else {
+                // merge and separate_merge both put the whole thing first.
                 total
             };
             let (ok, detail) = match outputs.first() {

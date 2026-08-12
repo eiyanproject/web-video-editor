@@ -6,6 +6,7 @@ import MediaInfo, { type Probe } from './MediaInfo'
 import Timeline from './Timeline'
 import SegmentList from './SegmentList'
 import ExportPanel from './ExportPanel'
+import Batch from './Batch'
 import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise } from './segments'
 
 // Paths are absolute container paths throughout. No root/rel pairs: you can
@@ -149,7 +150,7 @@ type Session = {
 }
 
 export default function App() {
-  const [page, setPage] = useState<'edit' | 'settings' | 'logs'>('edit')
+  const [page, setPage] = useState<'edit' | 'settings' | 'logs' | 'batch'>('edit')
   const [wantShare, setWantShare] = useState(false)
   const [cwd, setCwd] = useState('')
   const [parent, setParent] = useState<string | null>(null)
@@ -189,6 +190,9 @@ export default function App() {
   // The global key handler is registered once; these refs let it reach the
   // current handlers without re-binding a capture-phase listener every render.
   const probeRef = useRef<Probe | null>(null)
+  /// Which player the keyboard should drive: whichever was last played,
+  /// clicked or seeked.
+  const lastPlayerRef = useRef<'editor' | 'preview'>('editor')
   const splitRef = useRef<(() => void) | null>(null)
   const toggleRef = useRef<(() => void) | null>(null)
   const undoRef = useRef<(() => void) | null>(null)
@@ -386,12 +390,14 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
       if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return
-      // Keys drive the editor when a clip is loaded there, otherwise the
-      // preview player. You are working in the left pane; that is what should
-      // respond.
-      const v = editVideoRef.current ?? videoRef.current
+      // Keys follow whichever player you last touched. Always driving the
+      // editor meant scrubbing the wrong picture whenever you were previewing
+      // something in the library pane.
+      const wantEditor = lastPlayerRef.current !== 'preview'
+      const v = (wantEditor ? editVideoRef.current : videoRef.current)
+        ?? editVideoRef.current ?? videoRef.current
       if (!v) return
-      const isEditor = !!editVideoRef.current
+      const isEditor = v === editVideoRef.current
 
       // Frame stepping. The step is 1/fps of the loaded clip, so fractional
       // rates (23.976, 29.97) land on real frames instead of drifting.
@@ -694,6 +700,7 @@ export default function App() {
   const srcUrl = selected ? `/api/stream?path=${encodeURIComponent(selected.abs)}` : undefined
 
   if (page === 'logs') return <Logs onClose={() => setPage('edit')} />
+  if (page === 'batch') return <Batch onClose={() => setPage('edit')} />
   if (page === 'settings')
     return <Settings startWithShare={wantShare}
       onClose={() => { setWantShare(false); setPage('edit'); openDir('') }} />
@@ -709,7 +716,12 @@ export default function App() {
         {/* ---------------- left: editor ------------------------------- */}
         <div className="flex min-w-0 flex-col" style={{ width: `${mainSplit * 100}%` }}>
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
-            <span className="px-1 font-medium text-white/70">Trim</span>
+            <button className="rounded bg-indigo-500/80 px-3 py-1 font-medium text-white">Trim</button>
+            <button onClick={() => setPage('batch')}
+              title="Convert whole files between containers, in bulk"
+              className="rounded px-3 py-1 text-white/50 hover:bg-white/10 hover:text-white">
+              Batch remux
+            </button>
             <div className="flex-1" />
             <Btn title="Show the application log: mounts, saves, errors" onClick={() => setPage('logs')}>📋 Log</Btn>
             <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>
@@ -770,6 +782,9 @@ export default function App() {
                           }
                           pendingEditSeek.current = null
                         }}
+                        onPlay={() => { lastPlayerRef.current = 'editor' }}
+                        onClick={() => { lastPlayerRef.current = 'editor' }}
+                        onSeeking={() => { lastPlayerRef.current = 'editor' }}
                         onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                         onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                       />
@@ -964,6 +979,9 @@ export default function App() {
             {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
+                onPlay={() => { lastPlayerRef.current = 'preview' }}
+                onClick={() => { lastPlayerRef.current = 'preview' }}
+                onSeeking={() => { lastPlayerRef.current = 'preview' }}
                 onLoadedMetadata={() => {
                   setPlayError(null)
                   const v = videoRef.current

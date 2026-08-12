@@ -632,6 +632,63 @@ pub async fn get_sprite_sheet(
         .into_response())
 }
 
+// ---------------------------------------------------------------- poster
+
+/// One representative frame, cached.
+///
+/// Cheap on purpose: seek first, decode a single frame, stop. Unlike the sprite
+/// sheets this does not scan the file, so it is safe to call for every row of a
+/// folder listing.
+pub async fn get_poster(
+    State(st): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let (p, dir) = resolve_with_cache(&st, &q.path).await?;
+    let file = dir.join("poster.jpg");
+
+    if !q.refresh {
+        if let Ok(b) = tokio::fs::read(&file).await {
+            return Ok((
+                [(header::CONTENT_TYPE, "image/jpeg"),
+                 (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+                b,
+            ).into_response());
+        }
+    }
+
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    // 10% in avoids black leader and logo cards without a full probe first.
+    let out = tokio::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "60"])
+        .arg("-i").arg(&p)
+        .args(["-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "4"])
+        .arg(&file)
+        .output()
+        .await
+        .map_err(|e| ApiError::Internal(format!("cannot run ffmpeg: {e}")))?;
+
+    if !out.status.success() || !file.exists() {
+        // Short clip? Try the very beginning before giving up.
+        let _ = tokio::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .arg("-i").arg(&p)
+            .args(["-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "4"])
+            .arg(&file)
+            .output()
+            .await;
+    }
+
+    let bytes = tokio::fs::read(&file).await.map_err(|_| ApiError::NotFound)?;
+    Ok((
+        [(header::CONTENT_TYPE, "image/jpeg"),
+         (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+        bytes,
+    ).into_response())
+}
+
 // ---------------------------------------------------------------- deep check
 
 #[derive(Serialize)]

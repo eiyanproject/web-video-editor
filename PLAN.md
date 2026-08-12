@@ -153,6 +153,12 @@ Matching the screenshot's radio group:
 - **As a single file** — all keep-segments concatenated in order into one output.
 - **As separate files** — one output per keep-segment, named
   `{basename}_seg{n}{ext}` (template configurable).
+- **Separate then joined** — writes each segment as a complete, independently valid
+  file and only then concatenates those. Slower and uses more disk than joining byte
+  ranges of the source in one pass, but markedly more robust: a single-pass concat asks
+  the muxer to stitch across discontinuities on the fly, and some files come out wrong
+  that way. This is the fallback to reach for when a single-file export misbehaves —
+  the same reason desktop editors offer it.
 
 ### 2.7 Remuxing — changing container without touching the video
 
@@ -369,6 +375,8 @@ Recurring items that are easy to forget and must be present:
 | Any absolute path in play | Copy-path button |
 | Any folder being browsed | "Add to library" button |
 | Anything draggable | Equivalent click action |
+| Any path setting | A Browse button — nobody knows a NAS path by heart |
+| Two players on screen | Keys follow the one last used, not a fixed one |
 | Mount / unmount, job running | Status dot + explicit action button |
 | Destructive action | Confirm step, and an undo where feasible |
 | Long-running work | Progress + a Cancel button |

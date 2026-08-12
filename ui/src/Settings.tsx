@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import FolderPicker from './FolderPicker'
 
 type RootCfg = { name: string; path: string; writable: boolean }
 type SmbPublic = {
@@ -76,6 +77,7 @@ export default function Settings({
   const [editsDir, setEditsDir] = useState('')
   const [autosaveEdits, setAutosaveEdits] = useState(true)
   const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
+  const [picking, setPicking] = useState<null | 'edits' | 'output'>(null)
   const [savedEdits, setSavedEdits] = useState<
     { source: string; name: string; segments: number; kept: number; saved_at: number; exists: boolean }[]
   >([])
@@ -475,6 +477,8 @@ export default function Settings({
           if it ever moves. Reopening a clip loads its cuts back automatically.
         </p>
         <div className="flex gap-2">
+          <button onClick={() => setPicking('edits')} title="Browse for a folder"
+            className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20">📂 Browse</button>
           <input className={field} value={editsDir} placeholder="/mnt/smb/nas/.video-edits"
             onChange={(e) => { setEditsDir(e.target.value); setEditsCheck(null) }} />
           <button onClick={checkEdits} disabled={!editsDir.trim() || busy === 'checkEdits'}
@@ -534,6 +538,8 @@ export default function Settings({
             <label className="mb-2 block text-xs text-white/50">
               Where exports are written
               <div className="flex gap-2">
+                <button onClick={() => setPicking('output')} title="Browse for a folder"
+                  className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20">📂 Browse</button>
                 <input className={field} value={outputDir} placeholder="/mnt/smb/nas/edited"
                   onChange={(e) => { setOutputDir(e.target.value); setPathCheck(null) }} />
                 <button onClick={checkOutput} disabled={!outputDir.trim() || busy === 'check'}
@@ -573,6 +579,19 @@ export default function Settings({
           Allow opening any path, not just library folders
         </label>
       </section>
+
+      {picking && (
+        <FolderPicker
+          title={picking === 'edits' ? 'Choose the folder for saved edits' : 'Choose the export folder'}
+          initial={picking === 'edits' ? editsDir : outputDir}
+          onClose={() => setPicking(null)}
+          onPick={(p) => {
+            if (picking === 'edits') { setEditsDir(p); setEditsCheck(null) }
+            else { setOutputDir(p); setPathCheck(null) }
+            setPicking(null)
+          }}
+        />
+      )}
 
       <div className="sticky bottom-0 -mx-6 border-t border-white/10 bg-[#0f1116] px-6 py-3">
         <button onClick={save} disabled={!!busy}
