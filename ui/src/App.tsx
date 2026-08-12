@@ -93,6 +93,39 @@ const Btn = ({
   </button>
 )
 
+/** Detents at the quarters. Dragging to a round split is the common intent and
+ *  hitting it by hand is fiddly, so anything within 3% lands on it exactly. */
+const SNAPS = [0.25, 0.5, 0.75]
+
+function snapFraction(f: number, min = 0.15, max = 0.85) {
+  const c = Math.min(max, Math.max(min, f))
+  for (const s of SNAPS) if (Math.abs(c - s) < 0.03) return s
+  return c
+}
+
+/** Shared drag behaviour for both resizable dividers. */
+function beginSplitDrag(
+  e: React.MouseEvent,
+  rowRef: React.RefObject<HTMLDivElement | null>,
+  set: (f: number) => void,
+) {
+  e.preventDefault()
+  const onMove = (ev: MouseEvent) => {
+    const r = rowRef.current?.getBoundingClientRect()
+    if (!r || !r.width) return
+    set(snapFraction((ev.clientX - r.left) / r.width))
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+  }
+  // Without this a drag across the video selects half the page.
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 const LAST_DIR = 'veditor.lastDir'
 const SESSION = 'veditor.session'
 
@@ -106,6 +139,8 @@ type Session = {
   tcInput?: string
   /** Player/segment-list split inside the editor, as a fraction. */
   editSplit?: number
+  /** Editor pane against the library pane, as a fraction. */
+  mainSplit?: number
   muted?: boolean
   sortKey?: SortKey
   sortAsc?: boolean
@@ -176,6 +211,10 @@ export default function App() {
   const [editSplit, setEditSplit] = useState(0.75)
   const editRowRef = useRef<HTMLDivElement>(null)
 
+  // Split between the editor pane and the library/preview pane.
+  const [mainSplit, setMainSplit] = useState(0.5)
+  const mainRowRef = useRef<HTMLDivElement>(null)
+
   // The segment list must never decide how tall the row is - that is what was
   // shoving the timeline off the bottom of the screen once a few cuts existed.
   // Measure the picture and give the list exactly that height to scroll within.
@@ -189,25 +228,7 @@ export default function App() {
     return () => ro.disconnect()
   }, [loaded?.abs, editSplit, editDuration])
 
-  const startSplitDrag = (e: React.MouseEvent) => {
-    e.preventDefault()
-    const onMove = (ev: MouseEvent) => {
-      const r = editRowRef.current?.getBoundingClientRect()
-      if (!r || !r.width) return
-      let f = (ev.clientX - r.left) / r.width
-      f = Math.min(0.85, Math.max(0.15, f))
-      // Snap to the thirds: dragging to a round split is the common intent, and
-      // hitting it exactly by hand is fiddly.
-      for (const snap of [0.25, 0.5, 0.75]) if (Math.abs(f - snap) < 0.03) f = snap
-      setEditSplit(f)
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
+  const startSplitDrag = (e: React.MouseEvent) => beginSplitDrag(e, editRowRef, setEditSplit)
   const { segs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null)
   const dragBase = useRef<typeof segs | null>(null)
@@ -464,6 +485,7 @@ export default function App() {
     if (s.muted != null) setMuted(s.muted)
     if (s.tcInput) setTcInput(s.tcInput)
     if (typeof s.editSplit === 'number' && s.editSplit > 0.1 && s.editSplit < 0.9) setEditSplit(s.editSplit)
+    if (typeof s.mainSplit === 'number' && s.mainSplit > 0.1 && s.mainSplit < 0.9) setMainSplit(s.mainSplit)
     if (s.editTime != null) pendingEditSeek.current = s.editTime
     if (s.sortKey) setSortKey(s.sortKey)
     if (s.sortAsc != null) setSortAsc(s.sortAsc)
@@ -493,7 +515,7 @@ export default function App() {
   // Latest values for the periodic writer, so playback position is saved
   // without re-registering a timer four times a second.
   const sessionRef = useRef<Session>({})
-  sessionRef.current = { selected, loaded, time: curTime, editTime, tcInput, editSplit, muted, sortKey, sortAsc, showAll }
+  sessionRef.current = { selected, loaded, time: curTime, editTime, tcInput, editSplit, mainSplit, muted, sortKey, sortAsc, showAll }
   const writeSession = () => {
     if (!hydratedRef.current) return
     try { localStorage.setItem(SESSION, JSON.stringify(sessionRef.current)) } catch { /* quota */ }
@@ -515,7 +537,7 @@ export default function App() {
   const editBucket = Math.floor(editTime / 3)
   useEffect(() => {
     writeSession()
-  }, [hydrated, timeBucket, editBucket, tcInput, editSplit, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
+  }, [hydrated, timeBucket, editBucket, tcInput, editSplit, mainSplit, selected?.abs, loaded?.abs, muted, sortKey, sortAsc, showAll])
 
   useEffect(() => {
     const last = localStorage.getItem(LAST_DIR)
@@ -625,9 +647,9 @@ export default function App() {
           {toast}
         </div>
       )}
-      <div className="flex min-h-0 flex-1">
+      <div ref={mainRowRef} className="flex min-h-0 flex-1">
         {/* ---------------- left: editor ------------------------------- */}
-        <div className="flex w-1/2 flex-col border-r border-white/10">
+        <div className="flex min-w-0 flex-col" style={{ width: `${mainSplit * 100}%` }}>
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
             <span className="px-1 font-medium text-white/70">Trim</span>
             <div className="flex-1" />
@@ -813,8 +835,17 @@ export default function App() {
           </div>
         </div>
 
+        {/* Resizes the editor against the library, same detents as the inner
+            divider so both behave identically. */}
+        <div
+          onMouseDown={(e) => beginSplitDrag(e, mainRowRef, setMainSplit)}
+          onDoubleClick={() => setMainSplit(0.5)}
+          title="Drag to resize · snaps at 25%, 50%, 75% · double-click to reset"
+          className="w-1.5 shrink-0 cursor-col-resize bg-white/10 hover:bg-indigo-400/60"
+        />
+
         {/* ---------------- right: library + player -------------------- */}
-        <div className="flex w-1/2 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           {/* One navigation row: actions and location together, because they are
               the same concern. The path scrolls horizontally rather than
               wrapping, so the row never grows and steals height from the player. */}

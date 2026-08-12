@@ -296,6 +296,9 @@ Two-pane layout, dark theme, matching the reference screenshot's density.
   a side panel that grows the layout is a bug, not a feature.
 - **No horizontal scrollbar, ever.** Rows truncate to whatever width the split is at. A
   sideways scrollbar in a narrow panel always means the content was laid out wrong.
+- **Both splits are draggable**: the editor pane against the library pane, and the
+  player against the segment list inside it. Identical behaviour on purpose — one drag
+  gesture to learn, not two.
 - **Draggable split** between player and segment list, with detents at 25 / 50 / 75%.
   Dragging to a round split is the common intent and hitting it by hand is fiddly, so
   the handle snaps within 3%. Double-click resets to 75/25. The position persists.
