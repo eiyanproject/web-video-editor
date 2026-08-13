@@ -154,6 +154,11 @@ pub struct Jobs {
     pub map: Arc<RwLock<HashMap<String, Job>>>,
     /// Running ffmpeg processes, so a job can actually be stopped.
     procs: Arc<Mutex<HashMap<String, tokio::process::Child>>>,
+    /// Serialises claiming a run slot. Counting the running jobs and then
+    /// marking yourself running has to be one indivisible step, or two jobs
+    /// admitted in the same instant both see the same free slot and both take
+    /// it.
+    admission: Arc<Mutex<()>>,
 }
 
 fn now() -> u64 {
@@ -168,6 +173,62 @@ impl Jobs {
         if let Some(j) = self.map.write().await.get_mut(id) {
             f(j);
         }
+    }
+
+    async fn running_count(&self) -> usize {
+        self.map
+            .read()
+            .await
+            .values()
+            .filter(|j| j.status == "running")
+            .count()
+    }
+}
+
+/// Holds a queued job until the box has a free slot, and marks it running the
+/// moment it claims one.
+///
+/// Jobs used to be spawned the instant they were posted - "queued" was a label
+/// that nothing ever enforced. Batch remux posts one job per file, so picking
+/// forty files started forty ffmpeg processes at once, each one streaming a
+/// whole file over the same share. The cap is a setting rather than a constant
+/// because the right number depends on the box, but the default is 1: this
+/// work is I/O bound on a network share, so a second concurrent job does not
+/// finish the pair any sooner.
+///
+/// Returns false if the job was cancelled or cleared while it waited, in which
+/// case there is nothing to run.
+async fn wait_for_slot(st: &AppState, id: &str) -> bool {
+    loop {
+        match st.jobs.map.read().await.get(id).map(|j| j.status.clone()) {
+            Some(s) if s == "queued" => {}
+            // Cancelled while waiting, or the entry is gone.
+            _ => return false,
+        }
+
+        let limit = st.settings.read().await.max_parallel_jobs.max(1);
+
+        let running = {
+            let _admit = st.jobs.admission.lock().await;
+            let running = st.jobs.running_count().await;
+            if running < limit {
+                st.jobs
+                    .set(id, |j| {
+                        j.status = "running".into();
+                        j.message = "starting".into();
+                    })
+                    .await;
+                return true;
+            }
+            running
+        };
+
+        st.jobs
+            .set(id, |j| {
+                j.message = format!("waiting — {running} job(s) already running");
+            })
+            .await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
 
@@ -1042,7 +1103,29 @@ pub async fn start_export(
 
     let st2 = st.clone();
     let id2 = id.clone();
-    tokio::spawn(async move { run_export(st2, id2, req).await });
+    tokio::spawn(async move {
+        if !wait_for_slot(&st2, &id2).await {
+            return;
+        }
+        // Run the export in its OWN task so a panic inside it cannot leave the
+        // job marked running forever - which would hold a slot and wedge every
+        // job queued behind it, with nothing in the UI to explain why.
+        let st3 = st2.clone();
+        let id3 = id2.clone();
+        if tokio::spawn(async move { run_export(st3, id3, req).await })
+            .await
+            .is_err()
+        {
+            tracing::error!("export {id2} panicked; releasing its slot");
+            st2.jobs
+                .set(&id2, |j| {
+                    j.status = "failed".into();
+                    j.message = "the export task crashed".into();
+                    j.finished_at = now();
+                })
+                .await;
+        }
+    });
 
     Ok(Json(serde_json::json!({ "id": id })))
 }

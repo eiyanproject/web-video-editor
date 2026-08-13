@@ -146,6 +146,29 @@ Copied pieces keep their audio untouched, so this is a couple of seconds per cut
 property but never reaches the encoder's VUI, so it silently did nothing. Files stored
 854×480 with a 1280:1281 sample aspect came out subtly stretched.
 
+**One job at a time, enforced in the API rather than the UI.** Every export used to
+be `tokio::spawn`ed the instant it was posted - "queued" was a label nothing acted on.
+Batch remux posts one job per file, so selecting forty files started forty ffmpeg
+processes at once, each streaming a whole file over the same share, and the box fell
+over. A queued job now waits for a free slot before it runs, capped by
+`max_parallel_jobs` (default 1, Settings). The cap lives on the server because the queue
+is shared: three browsers and a phone all post to the same endpoint, so a limit enforced
+in any one of them is not a limit. Default 1 because this work is I/O bound on a network
+share - a second concurrent job does not finish the pair sooner, it just makes both
+slower.
+
+The claim is guarded by a mutex, because counting the running jobs and then marking
+yourself running has to be indivisible or two jobs admitted in the same instant both see
+the same free slot. And `run_export` runs inside its own task, so a panic cannot leave a
+job marked running forever, holding a slot and silently wedging everything behind it.
+
+**Both front ends lock while a job runs.** Cut, undo/redo, keep/drop and loading a clip
+are all held, on the desktop and the phone, with a banner saying why. Editing is local
+and costs the server nothing, but loading a clip reads the whole file to build a
+keyframe index over the share the job is already using - and a cut list edited mid-export
+is no longer the one being exported. Both poll `/api/jobs` even when they started
+nothing, since a job launched from any device has to lock the others.
+
 **Nothing expensive happens by accident.** Selecting a file costs a header read.
 Anything that reads the whole file — keyframe index, thumbnails, waveform — needs an
 explicit action: the index waits for *Load into editor*, thumbnails for a button, the
@@ -250,8 +273,7 @@ loading another clip are all held. Editing is local and costs the server nothing
 loading a clip reads the whole file to build a keyframe index, over the same share the
 export is streaming through. The job list is polled even when this phone started
 nothing, because the queue is shared - an export launched from the desktop has to lock
-the phone too. **The desktop has no equivalent lock**; it blocks a second export but
-will still index a clip mid-export.
+the phone too. The desktop carries the same lock now, driven by the same poll.
 
 Everything tappable is at least 44px, nothing depends on hover, and the layout is
 `100dvh` rather than `100vh` so the mobile URL bar does not crop it.

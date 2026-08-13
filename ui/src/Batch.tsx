@@ -240,7 +240,15 @@ export default function Batch({ onClose }: { onClose: () => void }) {
           className="rounded bg-indigo-500 px-3 py-1 font-medium text-white hover:bg-indigo-400 disabled:opacity-40">
           {busy ? 'Queueing…' : `Convert ${picked.size}`}
         </button>
-        {!!active.length && <span className="text-amber-300/80">{active.length} running</span>}
+        {!!active.length && (
+          <span className="text-amber-300/80">
+            {(() => {
+              const running = active.filter((j) => j.status === 'running').length
+              const queued = active.length - running
+              return queued ? `${running} running · ${queued} queued` : `${running} running`
+            })()}
+          </span>
+        )}
       </div>
 
       {showPicker && (

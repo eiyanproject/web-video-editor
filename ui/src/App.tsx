@@ -200,6 +200,26 @@ export default function App() {
   // the two front ends stay separate and this only decides whether to show a
   // link. Coarse pointer AND a narrow window, so a small desktop window on a
   // mouse does not get nagged.
+  // One ffmpeg job owns the box, whoever started it.
+  //
+  // Polled here rather than only inside ExportPanel, because the queue is
+  // shared across every device pointed at this server: an export or a batch
+  // remux started on the phone, or in another browser tab, has to lock this
+  // one too. Fast while something runs, lazy otherwise.
+  const [runningJob, setRunningJob] = useState<{ status: string; message: string } | null>(null)
+  useEffect(() => {
+    const poll = () =>
+      fetch('/api/jobs')
+        .then((r) => r.json())
+        .then((js: any[]) =>
+          setRunningJob(js.find((j) => j.status === 'running' || j.status === 'queued') ?? null))
+        .catch(() => {})
+    poll()
+    const id = setInterval(poll, runningJob ? 1000 : 8000)
+    return () => clearInterval(id)
+  }, [!!runningJob])
+  const jobBusy = !!runningJob
+
   const [showPhoneHint, setShowPhoneHint] = useState(false)
   useEffect(() => {
     if (localStorage.getItem(PHONE_HINT_OFF) === '1') return
@@ -528,6 +548,10 @@ export default function App() {
   openPasteRef.current = () => setShowPaste(true)
   loadIntoEditorRef.current = () => {
     if (!selected || selected.is_dir) { say('Select a video first'); return }
+    // Loading reads the whole file to build a keyframe index, over the same
+    // share a running job is already streaming through. This is the one
+    // editor action that actually costs the server something.
+    if (jobBusy) { say('A job is running — wait before loading another clip'); return }
     setLoaded(selected); say(`Loaded ${selected.name}`)
   }
   // The move their workflow actually turns on: take where the preview is and
@@ -558,10 +582,17 @@ export default function App() {
     say(`Segment ${next + 1} of ${segs.length}${seg.keep ? '' : ' (dropped)'}`)
   }
   saveEditRef.current = () => saveEdit(false)
-  splitRef.current = splitHere
-  toggleRef.current = toggleSelected
-  undoRef.current = undo
-  redoRef.current = redo
+  // Editing is local and costs the server nothing, but while a job runs the
+  // cut list on screen is no longer the one being exported - so it is held,
+  // the same way the phone holds it, rather than letting the two drift apart.
+  const heldWhileBusy = (f: () => void) => () => {
+    if (jobBusy) { say('A job is running — editing is held until it finishes'); return }
+    f()
+  }
+  splitRef.current = heldWhileBusy(splitHere)
+  toggleRef.current = heldWhileBusy(toggleSelected)
+  undoRef.current = heldWhileBusy(undo)
+  redoRef.current = heldWhileBusy(redo)
   goUpRef.current = () => { if (parent) openDir(parent) }
 
   // --- unloading ------------------------------------------------------------
@@ -1159,6 +1190,22 @@ export default function App() {
           overflows, so the one control that would rescue you is the one
           scrolled out of sight. This says it once, plainly, and remembers
           being dismissed. */}
+      {/* Whoever started it, wherever from. The queue is one per server. */}
+      {jobBusy && (
+        <div className="flex items-center gap-3 border-b border-amber-400/30 bg-amber-500/15 px-3 py-1.5 text-xs">
+          <span className="font-medium text-amber-100">
+            {runningJob?.status === 'queued' ? 'Job queued' : 'Job running'}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-amber-100/70">
+            {runningJob?.message || 'working…'} — editing and loading are held until it finishes
+          </span>
+          <button onClick={() => setPage('batch')}
+            className="shrink-0 rounded px-2 py-1 text-amber-100/80 hover:bg-white/10">
+            see jobs
+          </button>
+        </div>
+      )}
+
       {showPhoneHint && (
         <div className="flex items-center gap-3 border-b border-indigo-400/30 bg-indigo-500/15 px-3 py-2">
           <div className="min-w-0 flex-1 text-xs leading-relaxed text-white/75">
@@ -1288,8 +1335,10 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">
-            <Btn title="Load the selected video into the editor" tone="accent"
-              disabled={!selected} onClick={() => { setLoaded(selected); say(`Loaded ${selected!.name}`) }}>
+            <Btn title={jobBusy ? 'A job is running' : 'Load the selected video into the editor'}
+              tone="accent"
+              disabled={!selected || jobBusy}
+              onClick={() => { setLoaded(selected); say(`Loaded ${selected!.name}`) }}>
               ⇤ Load into editor
             </Btn>
             <Btn title="Clear the editor (U)" disabled={!loaded} onClick={clearEditor}>
@@ -1384,11 +1433,11 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1 border-t border-white/10 px-2 py-1.5 text-xs">
-                  <Btn title="Cut at the playhead (S)" tone="accent" onClick={splitHere}>✂ Cut here</Btn>
+                  <Btn title="Cut at the playhead (S)" tone="accent" disabled={jobBusy} onClick={splitHere}>✂ Cut here</Btn>
                   <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
                   <div className="mx-1 h-4 w-px bg-white/15" />
-                  <Btn title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>↶</Btn>
-                  <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↷</Btn>
+                  <Btn title="Undo (Ctrl+Z)" disabled={!canUndo || jobBusy} onClick={undo}>↶</Btn>
+                  <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || jobBusy} onClick={redo}>↷</Btn>
                   <Btn title="Remove every cut and start again" onClick={reset}>Reset</Btn>
                   <div className="mx-1 h-4 w-px bg-white/15" />
                   <Btn title="Save this cut list to the share so it comes back next time"

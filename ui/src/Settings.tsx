@@ -25,6 +25,7 @@ type SettingsData = {
   output_dir: string
   edits_dir: string
   autosave_edits: boolean
+  max_parallel_jobs: number
   default_username: string
   default_domain: string
   has_default_password: boolean
@@ -76,6 +77,7 @@ export default function Settings({
   const [pathCheck, setPathCheck] = useState<PathCheck | null>(null)
   const [editsDir, setEditsDir] = useState('')
   const [autosaveEdits, setAutosaveEdits] = useState(true)
+  const [maxJobs, setMaxJobs] = useState(1)
   const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
   const [picking, setPicking] = useState<null | 'edits' | 'output'>(null)
   const [savedEdits, setSavedEdits] = useState<
@@ -114,6 +116,7 @@ export default function Settings({
     setOutputDir(d.output_dir)
     setEditsDir(d.edits_dir ?? '')
     setAutosaveEdits(d.autosave_edits ?? true)
+    setMaxJobs(d.max_parallel_jobs ?? 1)
     fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
@@ -151,6 +154,7 @@ export default function Settings({
         output_dir: outputDir,
         edits_dir: editsDir,
         autosave_edits: autosaveEdits,
+        max_parallel_jobs: maxJobs,
         default_username: defUser,
         default_password: defPass,
         default_domain: defDomain,
@@ -534,6 +538,25 @@ export default function Settings({
           <input type="checkbox" checked={autosaveEdits} onChange={(e) => setAutosaveEdits(e.target.checked)} />
           Save cuts automatically as I edit
         </label>
+
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <label className="flex items-center gap-2 text-sm text-white/70">
+            <span>Run at most</span>
+            <input
+              type="number" min={1} max={8} value={maxJobs}
+              onChange={(e) => setMaxJobs(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+              className="w-16 rounded bg-white/10 px-2 py-1 text-center outline-none"
+            />
+            <span>export{maxJobs === 1 ? '' : 's'} or remux{maxJobs === 1 ? '' : 'es'} at a time</span>
+          </label>
+          <p className="mt-1 text-xs leading-relaxed text-white/40">
+            Anything past this waits its turn instead of starting. Batch remux queues one
+            job per file, so this is what stops forty selected files from launching forty
+            conversions at once. Leave it at 1 unless the box has spare cores and local
+            disks — this work is I/O bound on a network share, so running two rarely
+            finishes the pair any sooner.
+          </p>
+        </div>
         {!!savedEdits.length && (
           <div className="mt-3 rounded border border-white/10">
             <div className="border-b border-white/10 px-2 py-1 text-xs text-white/50">

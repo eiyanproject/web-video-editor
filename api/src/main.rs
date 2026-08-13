@@ -75,6 +75,10 @@ fn yes() -> bool {
     true
 }
 
+fn one() -> usize {
+    1
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -107,6 +111,16 @@ pub struct Settings {
     pub default_password: String,
     #[serde(default)]
     pub default_domain: String,
+    /// How many exports or remuxes may run at once.
+    ///
+    /// One by default, and one is the right answer on a small box: the work is
+    /// I/O bound on a network share, so a second job does not finish the pair
+    /// any sooner, it just makes both slower and the machine unusable. Batch
+    /// remux posts one job per file, so this is the difference between a
+    /// forty-file batch queueing and a forty-file batch starting forty ffmpeg
+    /// processes at the same instant.
+    #[serde(default = "one")]
+    pub max_parallel_jobs: usize,
 }
 
 impl Default for Settings {
@@ -122,6 +136,7 @@ impl Default for Settings {
             edits_dir: String::new(),
             autosave_edits: true,
             waveform_auto: false,
+            max_parallel_jobs: 1,
         }
     }
 }
@@ -650,6 +665,7 @@ struct SettingsPublic {
     edits_dir: String,
     autosave_edits: bool,
     waveform_auto: bool,
+    max_parallel_jobs: usize,
 }
 
 async fn is_mounted(mp: &str) -> bool {
@@ -699,6 +715,7 @@ async fn get_settings(State(st): State<AppState>) -> Json<SettingsPublic> {
         edits_dir: s.edits_dir.clone(),
         autosave_edits: s.autosave_edits,
         waveform_auto: s.waveform_auto,
+        max_parallel_jobs: s.max_parallel_jobs.max(1),
     })
 }
 
@@ -727,6 +744,8 @@ struct SettingsUpdate {
     autosave_edits: Option<bool>,
     #[serde(default)]
     waveform_auto: Option<bool>,
+    #[serde(default)]
+    max_parallel_jobs: Option<usize>,
 }
 
 async fn put_settings(
@@ -781,6 +800,9 @@ async fn put_settings(
         if let Some(v) = u.edits_dir { s.edits_dir = v; }
         if let Some(v) = u.autosave_edits { s.autosave_edits = v; }
         if let Some(v) = u.waveform_auto { s.waveform_auto = v; }
+        // Clamped here as well as in the UI: a 0 posted by anything else would
+        // stall the queue forever, since no job could ever claim a slot.
+        if let Some(v) = u.max_parallel_jobs { s.max_parallel_jobs = v.clamp(1, 8); }
     }
     let s = st.settings.read().await.clone();
     save_settings(&st.config_path, &s)
