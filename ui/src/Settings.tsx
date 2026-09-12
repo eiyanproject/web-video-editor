@@ -80,6 +80,17 @@ export default function Settings({
   const [autosaveEdits, setAutosaveEdits] = useState(true)
   const [maxJobs, setMaxJobs] = useState(1)
   const [maxScans, setMaxScans] = useState(1)
+  type LogRow = { ts: number; level: string; target: string; message: string }
+  const [logs, setLogs] = useState<LogRow[]>([])
+  const [logLevel, setLogLevel] = useState('')
+  const [logFind, setLogFind] = useState('')
+  const loadLogs = async (level = logLevel, contains = logFind) => {
+    try {
+      const r = await fetch(`/api/logs?level=${encodeURIComponent(level)}&contains=${encodeURIComponent(contains)}`)
+      const d = await r.json()
+      setLogs(d.entries ?? [])
+    } catch { /* the panel just stays as it was */ }
+  }
   const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
   const [picking, setPicking] = useState<null | 'edits' | 'output'>(null)
   const [savedEdits, setSavedEdits] = useState<
@@ -120,6 +131,7 @@ export default function Settings({
     setAutosaveEdits(d.autosave_edits ?? true)
     setMaxJobs(d.max_parallel_jobs ?? 1)
     setMaxScans(d.max_parallel_analysis ?? 1)
+    loadLogs()
     fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
@@ -576,6 +588,57 @@ export default function Settings({
             opening the same clip on a laptop and a phone started two full reads of it
             over the share, on top of whatever was exporting.
           </p>
+        </div>
+
+        {/* ---- logs ------------------------------------------------------- */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-white/70">Log</span>
+            <select value={logLevel} onChange={(e) => { setLogLevel(e.target.value); loadLogs(e.target.value, logFind) }}
+              className="rounded bg-white/10 px-2 py-1 text-xs outline-none">
+              <option value="">all levels</option>
+              <option value="INFO">info and above</option>
+              <option value="WARN">warnings and above</option>
+              <option value="ERROR">errors only</option>
+            </select>
+            <input value={logFind}
+              onChange={(e) => setLogFind(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') loadLogs(logLevel, logFind) }}
+              placeholder="find…"
+              className="w-32 rounded bg-white/10 px-2 py-1 text-xs outline-none placeholder:text-white/25" />
+            <button onClick={() => loadLogs()} className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Refresh</button>
+            <a href="/api/logs" download="veditor-logs.json"
+              className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Download</a>
+            <div className="flex-1" />
+            <span className="text-[11px] text-white/35">{logs.length} shown</span>
+          </div>
+
+          <p className="mt-1 text-xs leading-relaxed text-white/40">
+            Kept on disk beside <code className="text-white/55">settings.json</code>, so this
+            survives a restart or a rebuild — it is reloaded at startup rather than
+            beginning blank. The file rotates at 4&nbsp;MB and keeps one previous
+            generation, so it cannot grow without bound.
+          </p>
+
+          <div className="mt-2 max-h-64 overflow-auto rounded border border-white/10 bg-black/30 font-mono text-[11px]">
+            {logs.length === 0 ? (
+              <div className="p-3 text-white/30">Nothing recorded yet.</div>
+            ) : (
+              [...logs].reverse().map((l, i) => (
+                <div key={i} className="flex gap-2 border-b border-white/5 px-2 py-1 last:border-0">
+                  <span className="shrink-0 text-white/25">
+                    {new Date(l.ts * 1000).toLocaleTimeString()}
+                  </span>
+                  <span className={`w-12 shrink-0 ${
+                    l.level === 'ERROR' ? 'text-red-300'
+                      : l.level === 'WARN' ? 'text-amber-300'
+                      : 'text-white/35'
+                  }`}>{l.level.toLowerCase()}</span>
+                  <span className="min-w-0 flex-1 break-words text-white/70">{l.message}</span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
         {!!savedEdits.length && (
           <div className="mt-3 rounded border border-white/10">

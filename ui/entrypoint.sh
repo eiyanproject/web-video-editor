@@ -58,6 +58,28 @@ API_BLOCK=$(cat <<API
         access_log off;
     }
 
+    # The monitoring contract's endpoints, proxied at the ROOT and deliberately
+    # outside the auth block: vmagent scrapes port 80, and a scrape that needs
+    # credentials is a scrape that silently stops working. They expose no file
+    # data - a version string, a readiness verdict and counters.
+    location = /healthz {
+        proxy_pass http://api:8080;
+        proxy_set_header Host \$host;
+        access_log off;
+    }
+
+    location = /readyz {
+        proxy_pass http://api:8080;
+        proxy_set_header Host \$host;
+        access_log off;
+    }
+
+    location = /metrics {
+        proxy_pass http://api:8080;
+        proxy_set_header Host \$host;
+        access_log off;
+    }
+
     location /api/ {
         $AUTH_BLOCK
         proxy_pass http://api:8080;

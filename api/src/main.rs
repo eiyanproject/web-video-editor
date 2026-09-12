@@ -12,6 +12,7 @@
 mod edit;
 mod export;
 mod media;
+mod obs;
 
 use std::{
     collections::VecDeque,
@@ -188,7 +189,7 @@ impl SmbCfg {
 
 // ---------------------------------------------------------------- log capture
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LogEntry {
     /// Unix epoch seconds; the UI formats it.
     pub ts: u64,
@@ -197,29 +198,99 @@ pub struct LogEntry {
     pub message: String,
 }
 
-/// Ring buffer of recent events, so the UI can show what happened without
-/// anyone needing shell access to `docker logs`. Capped, because a long-running
-/// container should not grow memory just by being talkative.
+/// Recent events, in memory for the UI and on disk so they survive a restart.
+///
+/// The monitoring contract says stdout only, never a log file - its objection
+/// being "nothing to rotate, nothing to run out of disk". Both still hold here:
+/// stdout gets the JSON line the contract asks for, and the file is a bounded
+/// ring that rotates at a fixed size and keeps exactly one generation, so the
+/// worst case on disk is a known few megabytes rather than unbounded growth.
+/// The file exists because "read the last hour of errors" should not require
+/// shell access to the box the moment something is actually wrong.
 #[derive(Clone, Default)]
-pub struct LogBuffer(Arc<Mutex<VecDeque<LogEntry>>>);
+pub struct LogBuffer {
+    mem: Arc<Mutex<VecDeque<LogEntry>>>,
+    file: Arc<Mutex<Option<PathBuf>>>,
+}
 
 const LOG_CAPACITY: usize = 2000;
+/// Rotate at this size, keeping one previous generation, so the log costs at
+/// most twice this on disk. Small enough to read, large enough to cover the
+/// session you care about.
+const LOG_FILE_MAX: u64 = 4 * 1024 * 1024;
 
 impl LogBuffer {
+    /// Points the buffer at a file and loads the tail of it, so the UI shows
+    /// history from before the last restart rather than starting blank.
+    pub fn attach(&self, path: PathBuf) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut restored = 0usize;
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let lines: Vec<&str> = text.lines().collect();
+            let start = lines.len().saturating_sub(LOG_CAPACITY);
+            if let Ok(mut m) = self.mem.lock() {
+                for l in &lines[start..] {
+                    if let Ok(e) = serde_json::from_str::<LogEntry>(l) {
+                        m.push_back(e);
+                        restored += 1;
+                    }
+                }
+            }
+        }
+        if let Ok(mut f) = self.file.lock() {
+            *f = Some(path);
+        }
+        if restored > 0 {
+            tracing::info!("restored {restored} log line(s) from the previous run");
+        }
+    }
+
     fn push(&self, e: LogEntry) {
-        if let Ok(mut b) = self.0.lock() {
+        if let Ok(mut b) = self.mem.lock() {
             if b.len() >= LOG_CAPACITY {
                 b.pop_front();
             }
-            b.push_back(e);
+            b.push_back(e.clone());
+        }
+        self.append(&e);
+    }
+
+    /// One JSON object per line, the same shape as stdout.
+    fn append(&self, e: &LogEntry) {
+        let path = match self.file.lock() {
+            Ok(g) => match g.as_ref() {
+                Some(p) => p.clone(),
+                None => return,
+            },
+            Err(_) => return,
+        };
+        if std::fs::metadata(&path).map(|m| m.len() > LOG_FILE_MAX).unwrap_or(false) {
+            // One generation back, then start clean. Two files, bounded total.
+            let _ = std::fs::rename(&path, path.with_extension("jsonl.1"));
+        }
+        if let Ok(line) = serde_json::to_string(e) {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = writeln!(f, "{line}");
+            }
         }
     }
+
     fn snapshot(&self) -> Vec<LogEntry> {
-        self.0.lock().map(|b| b.iter().cloned().collect()).unwrap_or_default()
+        self.mem.lock().map(|b| b.iter().cloned().collect()).unwrap_or_default()
     }
+
     fn clear(&self) {
-        if let Ok(mut b) = self.0.lock() {
+        if let Ok(mut b) = self.mem.lock() {
             b.clear();
+        }
+        if let Ok(g) = self.file.lock() {
+            if let Some(p) = g.as_ref() {
+                let _ = std::fs::remove_file(p);
+                let _ = std::fs::remove_file(p.with_extension("jsonl.1"));
+            }
         }
     }
 }
@@ -245,6 +316,27 @@ impl tracing::field::Visit for MsgVisitor {
     }
 }
 
+/// RFC3339 in UTC, which is what the contract's `ts` field is.
+fn rfc3339(secs: u64) -> String {
+    // Civil-from-days, so no chrono dependency for one timestamp format.
+    let days = (secs / 86_400) as i64;
+    let tod = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, tod / 3600, (tod % 3600) / 60, tod % 60
+    )
+}
+
 struct CaptureLayer(LogBuffer);
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CaptureLayer {
@@ -252,11 +344,25 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CaptureLayer {
         let mut v = MsgVisitor(String::new());
         event.record(&mut v);
         let md = event.metadata();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // stdout, one JSON object per line, keys ts/level/msg/svc exactly as
+        // docs/SERVICE-CONTRACT.md specifies - journald carries it to
+        // VictoriaLogs with no parsing on either side.
+        let line = serde_json::json!({
+            "ts": rfc3339(ts),
+            "level": md.level().as_str().to_lowercase(),
+            "msg": v.0,
+            "svc": "web-video-editor",
+            "target": md.target(),
+        });
+        println!("{line}");
+
         self.0.push(LogEntry {
-            ts: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            ts,
             level: md.level().to_string(),
             target: md.target().to_string(),
             message: v.0,
@@ -336,6 +442,7 @@ pub struct AppState {
     pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
     pub jobs: export::Jobs,
     pub limits: Limits,
+    pub metrics: obs::Metrics,
 }
 
 fn now_secs() -> u64 {
@@ -1169,6 +1276,83 @@ struct LogQuery {
     contains: String,
 }
 
+/// Liveness. No dependency checks, never authenticated - if the process can
+/// answer this, it is alive, and that is the entire question.
+async fn healthz() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+/// Readiness: 200 only when the things this service needs are actually there.
+///
+/// This is what the external watcher polls, so it has to mean something. A
+/// configured share that is not mounted is the failure that matters here -
+/// every browse, probe and export below it fails, and nothing else in the
+/// process notices.
+async fn readyz(State(st): State<AppState>) -> Response {
+    let mut problems: Vec<String> = Vec::new();
+
+    // ffmpeg and ffprobe are the whole engine.
+    for tool in ["ffmpeg", "ffprobe"] {
+        let ok = tokio::process::Command::new(tool)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            problems.push(format!("{tool} is not runnable"));
+        }
+    }
+
+    // The analysis cache has to be writable or every probe re-runs forever.
+    let cache = media::cache_root();
+    let probe_file = cache.join(".readyz");
+    if tokio::fs::write(&probe_file, b"x").await.is_err() {
+        problems.push(format!("cache at {} is not writable", cache.display()));
+    } else {
+        let _ = tokio::fs::remove_file(&probe_file).await;
+    }
+
+    let shares: Vec<(String, String)> = {
+        let s = st.settings.read().await;
+        s.smb
+            .iter()
+            .filter(|c| c.auto_mount)
+            .map(|c| (c.name.clone(), c.effective_mountpoint()))
+            .collect()
+    };
+    for (name, mp) in shares {
+        if !is_mounted(&mp).await {
+            problems.push(format!("share {name} is not mounted"));
+        }
+    }
+
+    let ready = problems.is_empty();
+    let body = Json(serde_json::json!({
+        "status": if ready { "ready" } else { "degraded" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "problems": problems,
+    }));
+    if ready {
+        (StatusCode::OK, body).into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    }
+}
+
+async fn metrics(State(st): State<AppState>) -> Response {
+    (
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        obs::render(&st).await,
+    )
+        .into_response()
+}
+
 async fn get_logs(State(st): State<AppState>, Query(q): Query<LogQuery>) -> Json<serde_json::Value> {
     let want = q.level.trim().to_uppercase();
     let needle = q.contains.trim().to_lowercase();
@@ -1213,7 +1397,6 @@ async fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "veditor_api=debug,tower_http=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
         .with(CaptureLayer(logs.clone()))
         .init();
 
@@ -1244,7 +1427,25 @@ async fn main() -> anyhow::Result<()> {
         sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         jobs: export::Jobs::default(),
         limits: Limits::default(),
+        metrics: obs::Metrics::default(),
     };
+
+    // Beside settings.json, which is the path already bind-mounted to survive a
+    // rebuild - the whole point of persisting is being able to read what
+    // happened before the restart that lost it.
+    {
+        let log_path = std::env::var("VEDITOR_LOG_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                state
+                    .config_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("logs")
+                    .join("veditor.jsonl")
+            });
+        state.logs.attach(log_path);
+    }
 
     let cache = media::cache_root();
     if let Err(e) = std::fs::create_dir_all(&cache) {
@@ -1270,6 +1471,13 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(health))
+        // The monitoring contract's three. Deliberately OUTSIDE /api/ so they
+        // sit where every other service in the homelab puts them, and so the
+        // nginx auth block - which covers /api/ - never stands between vmagent
+        // and a scrape.
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics))
         .route("/api/browse", get(browse))
         .route("/api/resolve", get(resolve_pasted))
         .route("/api/stream", get(stream))
@@ -1300,6 +1508,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/smb/test", post(smb_test))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        // Applied after the routes so MatchedPath is populated: the metric is
+        // labelled with the route TEMPLATE, never the path that arrived.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            obs::track,
+        ))
         .with_state(state);
 
     let bind: SocketAddr = std::env::var("VEDITOR_BIND")
