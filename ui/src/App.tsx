@@ -169,7 +169,7 @@ const Menu = ({ items, label = 'More' }: { items: MenuItem[]; label?: string }) 
       </Btn>
       {open && (
         <div role="menu"
-          className="absolute right-0 z-40 mt-1.5 w-64 overflow-hidden rounded-xl border border-white/10 bg-[#1c1c1e] py-1.5 shadow-2xl shadow-black/50">
+          className="material absolute right-0 z-40 mt-1.5 w-64 overflow-hidden rounded-xl border border-white/10 py-1.5 shadow-2xl shadow-black/50">
           {items.map((it) => (
             <button key={it.label} role="menuitem" disabled={it.disabled}
               onClick={() => { setOpen(false); track('click', slug(it.label)); it.onClick() }}
@@ -240,6 +240,7 @@ function beginSplitDrag(
 const LAST_DIR = 'veditor.lastDir'
 const SESSION = 'veditor.session'
 const PHONE_HINT_OFF = 'veditor.phoneHintOff'
+const MEDIA_INFO_KEY = 'veditor.showMediaInfo'
 
 type Session = {
   selected?: Entry | null
@@ -309,6 +310,21 @@ export default function App() {
   const typingRef = useRef(false)
   /** Set when the handler bailed out for want of a loaded clip. */
   const gated = useRef(false)
+
+  // Media info is detail you want once, when a file looks wrong - not a panel
+  // that sits under the player on every clip you open. Off by default, kept in
+  // the browser rather than the server because it is a per-screen preference:
+  // the laptop and the big monitor can reasonably differ.
+  const [showMediaInfo, setShowMediaInfo] = useState(() => {
+    try { return localStorage.getItem(MEDIA_INFO_KEY) === '1' } catch { return false }
+  })
+  const toggleMediaInfo = () => {
+    setShowMediaInfo((v) => {
+      const next = !v
+      try { localStorage.setItem(MEDIA_INFO_KEY, next ? '1' : '0') } catch { /* private mode */ }
+      return next
+    })
+  }
 
   const [showPhoneHint, setShowPhoneHint] = useState(false)
   useEffect(() => {
@@ -1390,7 +1406,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
           onClick={() => setShowHelp(false)}>
           <div onClick={(e) => e.stopPropagation()}
-            className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-white/15 bg-[#1c1c1e] p-5 shadow-xl">
+            className="material max-h-[80vh] w-full max-w-2xl overflow-auto rounded-2xl border border-white/10 p-6 shadow-2xl">
             <div className="mb-3 flex items-center">
               <h2 className="text-base font-semibold">Keyboard</h2>
               <span className="ml-2 text-xs text-white/35">the whole flow, without the mouse</span>
@@ -1620,7 +1636,7 @@ export default function App() {
                   ]} />
                   {editSaved && <span className="text-[10px] text-white/25">saved {editSaved}</span>}
                   <div className="flex-1" />
-                  <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(editTime)}</span>
+                  <span className="tabular text-[11px] font-medium text-white/80">{fmtTimecode(editTime)}</span>
                   <span className="text-[10px] text-white/25">frame {Math.round(editTime * fps)}</span>
                 </div>
 
@@ -1643,7 +1659,6 @@ export default function App() {
                     placeholder="Go to  1:02:03.500 · 02:03.5 · 123.4"
                     className="w-56 rounded bg-white/10 px-2 py-1 font-mono outline-none placeholder:font-sans placeholder:text-white/25"
                   />
-                  <span className="text-[10px] text-white/25">↑↓ digit · ←→ move</span>
                   <Btn title="Jump to the typed time" onClick={goToTypedTime}>Go</Btn>
                   <Btn title="Put the current playhead time in the box, to nudge and re-enter"
                     onClick={() => setTcInput(fmtTimecode(editTime))}>⤴ Current</Btn>
@@ -1674,15 +1689,6 @@ export default function App() {
                   selectedId={selectedSeg}
                 />
 
-                <div className="flex items-center gap-1 border-y border-white/10 px-2 py-1 text-[11px] text-white/40">
-                  <span>step</span>
-                  <Btn title="Back one frame (,)" onClick={() => seek(editTime - 1 / fps)}>◀|</Btn>
-                  <Btn title="Forward one frame (.)" onClick={() => seek(editTime + 1 / fps)}>|▶</Btn>
-                  <Btn title="Back 5s (←)" onClick={() => seek(editTime - 5)}>−5s</Btn>
-                  <Btn title="Forward 5s (→)" onClick={() => seek(editTime + 5)}>+5s</Btn>
-                  <div className="flex-1" />
-                  <span className="text-white/20">S cut · Del keep/drop · , . frame · Space play</span>
-                </div>
 
                 {/* Slack goes here, below everything, so the export strip stays
                     pinned to the bottom and the tools stay together up top. */}
@@ -1841,7 +1847,7 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5">
             {/* Live playhead readout to millisecond precision. This is the number
                 Phase 2 will turn into cut points, so it is worth showing now. */}
-            <span className="rounded bg-black/40 px-2 py-1 font-mono text-xs text-emerald-300">
+            <span className="tabular rounded bg-white/[0.06] px-2 py-1 text-xs font-medium text-white/85">
               {fmtTimecode(curTime)}
             </span>
             {duration > 0 && <span className="font-mono text-xs text-white/25">/ {fmtTimecode(duration)}</span>}
@@ -1865,12 +1871,14 @@ export default function App() {
                 disabled: !selected, onClick: rebuildThumbs },
               { icon: 'wave', label: waveBusy ? 'Reading audio…' : waveAuto ? 'Waveform: on' : 'Waveform: off',
                 disabled: waveBusy, onClick: toggleWaveAuto },
+              { icon: 'list', label: showMediaInfo ? 'Hide media info' : 'Show media info',
+                onClick: toggleMediaInfo },
               { icon: 'eject', label: 'Close this video', hint: 'U',
                 disabled: !selected, onClick: closePreview },
             ]} />
           </div>
 
-          {probe && (
+          {probe && showMediaInfo && (
             <MediaInfo
               probe={probe}
               keyframeCount={keyframes.length}

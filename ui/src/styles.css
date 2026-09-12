@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/* Self-hosted, not a webfont request. Inter is the closest free face to SF Pro
+   and - the point here - it renders IDENTICALLY on every machine. The system
+   stack resolved to Segoe UI on Windows, Cantarell or Noto on one distro,
+   DejaVu on another, so "the same app" looked different on each of them. The
+   file ships in the bundle, so this still works on a LAN with no internet. */
+@import "@fontsource-variable/inter";
 
 /* ---------------------------------------------------------------- theme
    Apple's dark pro-app palette: graphite surfaces that layer by getting
@@ -9,7 +15,11 @@
    The accent is redefined here as Tailwind's `indigo` ramp rather than being
    renamed. Every `bg-indigo-500` already in the app becomes Apple's system
    purple with no file touched, so the colour lives in exactly one place and
-   cannot drift between the two front ends. */
+   cannot drift between the two front ends.
+
+   The semantic ramps are pinned to Apple's system colours for the same reason:
+   the app had emerald, amber and red at a dozen different tints, which is what
+   made the interface look assembled rather than designed. */
 @theme {
   --color-indigo-50:  #faf4ff;
   --color-indigo-100: #f3e6ff;
@@ -21,6 +31,23 @@
   --color-indigo-700: #8e37b8;
   --color-indigo-800: #722e94;
   --color-indigo-900: #5a2475;
+
+  /* systemGreen / systemOrange / systemRed, dark variants. */
+  --color-emerald-100: #d6f7e0;
+  --color-emerald-200: #a6efbf;
+  --color-emerald-300: #6ee7a0;
+  --color-emerald-400: #46dd81;
+  --color-emerald-500: #30d158;
+  --color-amber-100:   #ffe8c2;
+  --color-amber-200:   #ffd694;
+  --color-amber-300:   #ffc266;
+  --color-amber-400:   #ffb340;
+  --color-amber-500:   #ff9f0a;
+  --color-red-100:     #ffd9d6;
+  --color-red-200:     #ffb3ad;
+  --color-red-300:     #ff8a82;
+  --color-red-400:     #ff6961;
+  --color-red-500:     #ff453a;
 }
 
 :root {
@@ -43,22 +70,38 @@ body {
   margin: 0;
   background: var(--ground);
   color: var(--label);
-  /* SF on Apple hardware, the platform UI face everywhere else. Never a
-     webfont: the system face is the one that looks native, and it costs
-     nothing to load. */
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
-    "Segoe UI", Inter, system-ui, "Noto Sans", "Helvetica Neue", Arial,
-    "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
-  /* Apple's UI type is optically lighter than a browser default; without
-     antialiasing it reads heavy and muddy on graphite. */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.01em;
+  font-family: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
+/* Tracking follows SIZE, the way SF does, instead of one global value.
+   Apple tightens large text and LOOSENS small text: -0.43px at 17pt but
+   +0.15px at 11pt. A single negative value - which is what was here - makes
+   the 11-13px text this interface is mostly built from feel cramped and
+   slightly smeared, which is exactly the "blurry" complaint. */
+.text-\[10px\], .text-\[11px\] { letter-spacing: 0.014em; }
+.text-xs  { letter-spacing: 0.01em; }
+.text-\[13px\], .text-sm { letter-spacing: 0.002em; }
+.text-base { letter-spacing: 0; }
+.text-lg, .text-xl, .text-2xl { letter-spacing: -0.015em; }
+
+/* Only macOS ever applied this - Chrome ignores it on Windows and Linux - and
+   where it DID apply it made light-on-dark text thinner and hazier. Scoped to
+   nothing rather than set globally; the default subpixel rendering is sharper
+   on the LCDs this is actually used on. */
+
 /* Numbers that change in place - timecodes, durations, sizes - must not make
-   the layout twitch as they tick. */
-.font-mono, code, kbd, samp {
+   the layout twitch as they tick. Inter's tabular figures do that without
+   switching face, which is what Apple does for timecodes: the system font with
+   monospaced digits, not a monospace font. A true mono is kept for paths and
+   log lines, where character-level alignment genuinely matters. */
+.tabular, .font-mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "cv01" 1;
+}
+code, kbd, samp, .mono {
   font-family: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
   font-variant-numeric: tabular-nums;
@@ -75,11 +118,16 @@ body {
   }
 }
 
-/* Panels read as layered material rather than outlined boxes. */
-.bg-\[\#1c1c1e\] {
-  background-color: color-mix(in srgb, var(--panel) 92%, transparent);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+/* Material is for things that FLOAT over content - menus, sheets, the help
+   overlay - and nothing else. It was previously applied to every element
+   carrying the panel colour, which is most of the app: backdrop-filter puts
+   each one on its own compositing layer, and text and canvases sitting on a
+   composited layer at a fractional offset render soft. That is where the
+   blur came from. */
+.material {
+  background-color: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
 }
 
 /* The phone's timecode wheels scroll but must not show a bar: at 56px wide a

@@ -1,4 +1,5 @@
 import { type Segment, cutCost, keptDuration } from './segments'
+import Icon from './Icon'
 
 const tc = (t: number) => {
   if (!isFinite(t) || t < 0) t = 0
@@ -49,44 +50,59 @@ export default function SegmentList({
           const cost = i < segs.length - 1 ? cuts[i] : null
           return (
             <div key={s.id}>
+              {/* A list row, not a bordered card. Apple lists separate rows with
+                  a hairline and mark selection with a tinted fill - a border
+                  around every row is what made this column read as a stack of
+                  boxes. The row action stays invisible until the row is
+                  hovered or focused, which is the same rule the file list
+                  already follows. */}
               <div
                 onClick={() => { onSelect(s.id); onSeek(s.start) }}
-                className={`flex cursor-pointer items-center gap-1.5 overflow-hidden rounded border px-1.5 py-1 text-[11px] ${
-                  s.id === selectedId ? 'border-indigo-400/60 bg-indigo-500/15' : 'border-white/10 hover:bg-white/5'
-                } ${s.keep ? '' : 'opacity-45'}`}
+                className={`group flex cursor-pointer items-center gap-2.5 overflow-hidden rounded-lg px-2 py-1.5 text-[11px] transition-colors ${
+                  s.id === selectedId ? 'bg-indigo-500/20' : 'hover:bg-white/[0.06]'
+                }`}
               >
-                <span className={`shrink-0 tabular-nums ${s.keep ? 'text-white/60' : 'text-white/40 line-through'}`}>
+                <span className={`w-4 shrink-0 tabular text-right ${
+                  s.keep ? 'text-white/35' : 'text-white/20'
+                }`}>
                   {i + 1}
                 </span>
-                <span className={`min-w-0 flex-1 truncate font-mono ${s.keep ? 'text-white/80' : 'text-white/40 line-through'}`}>
-                  {tc(s.start)}–{tc(s.end)}
+                <span className={`min-w-0 flex-1 truncate tabular ${
+                  s.keep ? 'text-white/85' : 'text-white/30 line-through'
+                }`}>
+                  {tc(s.start)} – {tc(s.end)}
                 </span>
-                <span className="shrink-0 font-mono text-white/30">{tc(s.end - s.start)}</span>
+                <span className={`shrink-0 tabular ${s.keep ? 'text-white/35' : 'text-white/20'}`}>
+                  {tc(s.end - s.start)}
+                </span>
                 <button
                   onClick={(e) => { e.stopPropagation(); onToggle(s.id) }}
                   title={s.keep ? 'Exclude this segment from the export' : 'Include it again'}
-                  className={`shrink-0 rounded px-1.5 ${
-                    s.keep ? 'bg-white/10 hover:bg-red-500/40' : 'bg-emerald-500/25 hover:bg-emerald-500/40'
+                  className={`shrink-0 rounded-md p-1 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 ${
+                    s.keep ? 'text-white/50 hover:bg-white/10 hover:text-red-300'
+                           : 'text-emerald-400 opacity-100 hover:bg-white/10'
                   }`}
                 >
-                  {s.keep ? '🗑' : '↺'}
+                  <Icon name={s.keep ? 'trash' : 'refresh'} size={13} />
                 </button>
               </div>
 
               {/* the cut between this segment and the next */}
               {cost && (
-                <div className="flex items-center gap-1.5 overflow-hidden py-0.5 pl-2 text-[10px]">
+                <div className="group/cut flex items-center gap-2 overflow-hidden py-1 pl-3 pr-2 text-[10px]">
+                  <span className="h-px w-3 shrink-0 bg-white/15" />
                   <button onClick={() => onSeek(s.end)}
                     title="Jump to this cut"
-                    className="shrink-0 font-mono text-white/40 underline-offset-2 hover:text-white hover:underline">
-                    ✂{tc(s.end)}
+                    className="shrink-0 tabular text-white/35 transition hover:text-white">
+                    {tc(s.end)}
                   </button>
-                  <span className={`min-w-0 flex-1 truncate ${cost.lossless ? 'text-emerald-300/80' : 'text-amber-300/80'}`}>
-                    {cost.lossless ? 'lossless' : `−${cost.reencode.toFixed(2)}s`}
+                  {/* The price of the cut. Green only ever means free. */}
+                  <span className={`min-w-0 flex-1 truncate ${cost.lossless ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {cost.lossless ? 'lossless' : `re-encodes ${cost.reencode.toFixed(2)}s`}
                   </span>
                   <button onClick={() => onMerge(i)} title="Remove this cut and merge the two segments"
-                    className="shrink-0 rounded px-1 text-white/25 hover:bg-white/10 hover:text-white/70">
-                    ✕
+                    className="shrink-0 rounded-md p-0.5 text-white/25 opacity-0 transition hover:bg-white/10 hover:text-white group-hover/cut:opacity-100 focus-visible:opacity-100">
+                    <Icon name="close" size={11} />
                   </button>
                 </div>
               )}
@@ -103,7 +119,7 @@ export default function SegmentList({
       {segs.length > 1 && (
         <div className="shrink-0 border-t border-white/10 px-2 py-1.5 text-[10px] leading-snug">
           {lossless ? (
-            <span className="text-emerald-300">All cuts lossless — pure stream copy.</span>
+            <span className="text-emerald-400">All cuts lossless — pure stream copy.</span>
           ) : (
             <>
               <span className="text-white/40">Re-encodes </span>

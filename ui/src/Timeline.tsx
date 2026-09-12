@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { type Segment, cutCost, snapToKeyframe } from './segments'
+import { PALETTE } from './lib/shared'
 
 // Canvas rather than DOM: a two-hour clip at high zoom can carry thousands of
 // keyframe ticks, and one node each would make panning crawl. One canvas redraws
@@ -81,7 +82,7 @@ export default function Timeline({
     g.fillRect(0, 0, size.w, RULER)
     const step = niceStep(span, size.w)
     g.strokeStyle = 'rgba(255,255,255,0.15)'
-    g.fillStyle = 'rgba(255,255,255,0.45)'
+    g.fillStyle = PALETTE.ink
     g.font = '10px ui-monospace, monospace'
     g.beginPath()
     for (let t = Math.ceil(view.start / step) * step; t <= view.end; t += step) {
@@ -95,7 +96,7 @@ export default function Timeline({
     // that the track becomes a solid block
     const visible = keyframes.filter((t) => t >= view.start && t <= view.end)
     if (visible.length && visible.length < size.w / 2) {
-      g.strokeStyle = 'rgba(56,189,248,0.35)'
+      g.strokeStyle = PALETTE.inkSoft
       g.beginPath()
       for (const t of visible) {
         const x = Math.round(toX(t)) + 0.5
@@ -112,15 +113,19 @@ export default function Timeline({
       const w = Math.max(1, x1 - x0)
 
       if (s.keep) {
-        g.fillStyle = s.id === selectedId ? 'rgba(99,102,241,0.55)' : 'rgba(99,102,241,0.32)'
+        // Accent marks what is SELECTED, not everything that is kept. Filling
+        // every kept segment with it turned the whole timeline into one purple
+        // slab that carried no information - and made the accent stop meaning
+        // anything, since it was already everywhere.
+        g.fillStyle = s.id === selectedId ? PALETTE.accentStrong : PALETTE.keep
         g.fillRect(x0, trackY, w, trackH)
       } else {
         // hatched = excluded from the export
-        g.fillStyle = 'rgba(255,255,255,0.04)'
+        g.fillStyle = PALETTE.inkFaint
         g.fillRect(x0, trackY, w, trackH)
         g.save()
         g.beginPath(); g.rect(x0, trackY, w, trackH); g.clip()
-        g.strokeStyle = 'rgba(255,255,255,0.16)'
+        g.strokeStyle = PALETTE.inkSoft
         g.lineWidth = 1
         g.beginPath()
         for (let x = x0 - trackH; x < x1 + trackH; x += 8) {
@@ -130,7 +135,7 @@ export default function Timeline({
         g.restore()
       }
 
-      g.strokeStyle = s.id === selectedId ? 'rgba(165,180,252,0.9)' : 'rgba(255,255,255,0.18)'
+      g.strokeStyle = s.id === selectedId ? PALETTE.accentLight : PALETTE.inkSoft
       g.lineWidth = 1
       g.strokeRect(Math.round(x0) + 0.5, trackY + 0.5, Math.round(w) - 1, trackH - 1)
     }
@@ -141,20 +146,20 @@ export default function Timeline({
       const x = Math.round(toX(t)) + 0.5
       if (x < -4 || x > size.w + 4) continue
       const cost = cutCost(t, keyframes, fps)
-      g.strokeStyle = cost.lossless ? 'rgba(52,211,153,0.95)' : 'rgba(251,191,36,0.95)'
+      g.strokeStyle = cost.lossless ? PALETTE.ok : PALETTE.warn
       g.lineWidth = 2
       g.beginPath(); g.moveTo(x, trackY - 3); g.lineTo(x, trackY + trackH + 3); g.stroke()
-      g.fillStyle = cost.lossless ? 'rgb(52,211,153)' : 'rgb(251,191,36)'
+      g.fillStyle = cost.lossless ? PALETTE.ok : PALETTE.warn
       g.fillRect(x - 3, trackY - 6, 6, 5)
     }
 
     // playhead
     const px = Math.round(toX(current)) + 0.5
     if (px >= -2 && px <= size.w + 2) {
-      g.strokeStyle = 'rgb(110,231,183)'
+      g.strokeStyle = PALETTE.accentLight
       g.lineWidth = 1
       g.beginPath(); g.moveTo(px, 0); g.lineTo(px, size.h); g.stroke()
-      g.fillStyle = 'rgb(110,231,183)'
+      g.fillStyle = PALETTE.accentLight
       g.beginPath()
       g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 7); g.closePath(); g.fill()
     }
@@ -284,8 +289,14 @@ export default function Timeline({
           onWheel={onWheel}
         />
       </div>
-      <div className="px-2 pt-1 text-[10px] text-white/25">
-        scroll to zoom · drag a cut handle to move it · hold Shift while dragging to snap to a keyframe
+      {/* Shown while the pointer is over the timeline, not permanently. These
+          are three facts you need once; after that they are a line of grey
+          text you have trained yourself to skip, still taking the space.
+          Opacity rather than mount/unmount so the strip never reflows. */}
+      <div className={`px-2 pt-1 text-[10px] text-white/30 transition-opacity duration-150 ${
+        hover ? 'opacity-100' : 'opacity-0'
+      }`}>
+        scroll to zoom · drag a cut handle to move it · hold Shift to snap to a keyframe
       </div>
     </div>
   )

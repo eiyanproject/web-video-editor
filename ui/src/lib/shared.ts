@@ -72,3 +72,31 @@ export function displayAspect(p: { width: number; height: number; sar?: string }
 /** The port the phone UI is served on. The desktop header links to it, and the
  *  dev stack and nginx both listen there. One number, one place. */
 export const PHONE_PORT = Number(import.meta.env.VITE_PHONE_PORT ?? 5274)
+
+/**
+ * The palette, for the canvases.
+ *
+ * CSS classes get their colour from the `@theme` block in styles.css, but a
+ * canvas takes a string - so the timeline was still painting the OLD indigo
+ * blue and a green playhead long after the rest of the app turned purple.
+ * Nothing on a canvas may hardcode a colour; it comes from here, and this is
+ * the same set of values the stylesheet declares.
+ */
+export const PALETTE = {
+  /** systemPurple. Selection, the playhead, anything the user is acting on. */
+  accent: 'rgb(191, 90, 242)',
+  accentSoft: 'rgba(191, 90, 242, 0.32)',
+  accentStrong: 'rgba(191, 90, 242, 0.55)',
+  accentLight: 'rgb(221, 169, 247)',
+  /** systemGreen. Reserved for "this is free / this succeeded" and nothing else. */
+  ok: 'rgb(48, 209, 88)',
+  /** systemOrange. A cost, not an error. */
+  warn: 'rgb(255, 159, 10)',
+  /** A kept segment. Neutral on purpose: the timeline should read as film,
+   *  and the accent is reserved for the one segment you have selected. */
+  keep: 'rgba(255, 255, 255, 0.13)',
+  /** Structure: grid lines, dropped regions, separators. */
+  ink: 'rgba(255, 255, 255, 0.45)',
+  inkSoft: 'rgba(255, 255, 255, 0.16)',
+  inkFaint: 'rgba(255, 255, 255, 0.04)',
+} as const

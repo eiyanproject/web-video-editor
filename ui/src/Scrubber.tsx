@@ -67,7 +67,7 @@ export default function Scrubber({
     const g = c.getContext('2d')!
     g.setTransform(dpr, 0, 0, dpr, 0, 0)
     g.clearRect(0, 0, width, h)
-    g.fillStyle = 'rgba(148,163,184,0.35)'
+    g.fillStyle = 'rgba(255,255,255,0.28)'
     const mid = h / 2
     const step = width / peaks.length
     for (let i = 0; i < peaks.length; i++) {
@@ -139,10 +139,10 @@ export default function Scrubber({
           ))}
 
         {/* played portion */}
-        <div className="absolute inset-y-0 left-0 rounded-l bg-indigo-500/35" style={{ width: `${pct}%` }} />
+        <div className="absolute inset-y-0 left-0 rounded-l bg-indigo-500/25" style={{ width: `${pct}%` }} />
 
         {/* playhead */}
-        <div className="absolute inset-y-0 w-0.5 bg-emerald-300" style={{ left: `${pct}%` }} />
+        <div className="absolute inset-y-0 w-0.5 bg-indigo-300" style={{ left: `${pct}%` }} />
 
         {/* hover line */}
         {hoverT != null && duration > 0 && (
@@ -183,28 +183,36 @@ export default function Scrubber({
         </div>
       )}
 
-      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-white/35">
-        <span className="font-mono">{fmt(current)} / {fmt(duration)}</span>
-        <span className="text-white/20">← → 5s</span>
-        {!!keyframes.length && (
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-px bg-white/50" />
-            {keyframes.length} keyframes
-          </span>
-        )}
-        {indexing && <span className="text-amber-300/70">indexing keyframes…</span>}
+      {/* Time on the left, status on the right, and the ADVICE only while the
+          pointer is here.
+          A row of permanent grey hints is the interface talking to itself: it
+          is the same words every time you look, so after a day they are noise
+          you have learned to skip, and they still cost the space. Progress -
+          indexing, building, failed - is never hidden, because that is a
+          changing fact rather than a hint. */}
+      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-white/40">
+        {/* No clock here. The player's own controls sit directly above this bar
+            and already show current / duration to the second; the toolbar chip
+            carries the millisecond figure that those cannot. Printing it a
+            third time is what made the pane feel repetitive. */}
+        <div className="flex-1" />
+
+        {indexing && <span className="text-amber-300">indexing keyframes…</span>}
         {sprites && !sprites.done && !sprites.error && (
-          <span className="text-amber-300/70">
-            building thumbnails… {sprites.sheets}/{Math.ceil(sprites.count / 100) || '?'} sheets
+          <span className="text-amber-300">
+            building thumbnails {sprites.sheets}/{Math.ceil(sprites.count / 100) || '?'}
           </span>
         )}
-        {sprites?.error && <span className="text-red-300/80">thumbnails failed</span>}
-        {!!peaks?.length && <span className="text-white/25">waveform</span>}
-        {!sprites && (
-          <span className="text-white/25">
-            hover for time · thumbnails off (reads the whole file — use the Thumbs button)
+        {sprites?.error && <span className="text-red-300">thumbnails failed</span>}
+
+        {/* opacity, not conditional rendering: the row must not change height
+            or reflow when the pointer arrives. */}
+        <span className={`transition-opacity duration-150 ${hoverT != null ? 'opacity-100' : 'opacity-0'}`}>
+          {!!keyframes.length && <span className="text-white/35">{keyframes.length} keyframes · </span>}
+          <span className="text-white/30">
+            {sprites ? 'drag to scrub' : 'thumbnails off — Player actions ▸ Build thumbnails'}
           </span>
-        )}
+        </span>
       </div>
     </div>
   )
