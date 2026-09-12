@@ -266,7 +266,7 @@ export default function PhoneApp() {
   return (
     // 100dvh, not 100vh: the mobile URL bar is part of the viewport in vh and
     // crops the bottom of the layout as it hides and shows.
-    <div className="h-screen-dynamic pad-x-safe flex flex-col overflow-hidden bg-[#0b0d12] text-white">
+    <div className="h-screen-dynamic pad-x-safe flex flex-col overflow-hidden bg-[#141416] text-white">
 
       <header className="pad-top-safe flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
         <span className="text-sm font-semibold">Video Editor</span>
@@ -541,7 +541,7 @@ export default function PhoneApp() {
 
       {/* ---- file sheet ---------------------------------------------------- */}
       {sheet && (
-        <div className="pad-x-safe fixed inset-0 z-50 flex flex-col bg-[#0b0d12] md:inset-y-8 md:left-1/2 md:w-[36rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-xl md:border md:border-white/15 md:shadow-2xl">
+        <div className="pad-x-safe fixed inset-0 z-50 flex flex-col bg-[#141416] md:inset-y-8 md:left-1/2 md:w-[36rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-xl md:border md:border-white/15 md:shadow-2xl">
           <header className="pad-top-safe flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 md:pt-2">
             <Tap onClick={() => openDir(parent ?? '')} disabled={!parent && cwd === ''}>↑</Tap>
             <div className="min-w-0 flex-1">

@@ -136,7 +136,7 @@ export default function Scrubber({
         {/* keyframe ticks: where a lossless cut may land. Full height, because
             without thumbnails this bar's job is showing cut geometry. */}
         {ticks.map((t, i) => (
-          <div key={i} className="absolute inset-y-0 w-px bg-sky-400/30"
+          <div key={i} className="absolute inset-y-0 w-px bg-white/25"
             style={{ left: `${(t / duration) * 100}%` }} />
         ))}
 
@@ -186,7 +186,7 @@ export default function Scrubber({
             {fmt(hoverT)}
           </div>
           {nearestKf != null && (
-            <div className="px-2 pb-0.5 text-center font-mono text-[10px] text-sky-300/80">
+            <div className="px-2 pb-0.5 text-center font-mono text-[10px] text-white/60/80">
               keyframe {Math.abs(nearestKf - hoverT) < 0.05 ? 'here' : `${(nearestKf - hoverT >= 0 ? '+' : '')}${(nearestKf - hoverT).toFixed(2)}s`}
             </div>
           )}
@@ -198,7 +198,7 @@ export default function Scrubber({
         <span className="text-white/20">← → 5s</span>
         {!!keyframes.length && (
           <span className="flex items-center gap-1">
-            <span className="inline-block h-2 w-px bg-sky-400/70" />
+            <span className="inline-block h-2 w-px bg-white/50" />
             {keyframes.length} keyframes
           </span>
         )}

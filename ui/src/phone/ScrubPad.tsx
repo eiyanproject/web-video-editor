@@ -76,7 +76,7 @@ export default function ScrubPad({
         className="relative h-11 touch-none select-none overflow-hidden rounded-lg bg-white/10"
       >
         {ticks.map((t, i) => (
-          <div key={i} className="pointer-events-none absolute inset-y-0 w-px bg-sky-400/25"
+          <div key={i} className="pointer-events-none absolute inset-y-0 w-px bg-white/20"
             style={{ left: `${(t / duration) * 100}%` }} />
         ))}
 

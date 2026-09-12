@@ -52,7 +52,7 @@ export default function FolderPicker({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
       onClick={onClose}>
-      <div className="flex h-[70vh] w-full max-w-2xl flex-col rounded-lg border border-white/15 bg-[#12141a] shadow-xl"
+      <div className="flex h-[70vh] w-full max-w-2xl flex-col rounded-lg border border-white/15 bg-[#1c1c1e] shadow-xl"
         onClick={(e) => e.stopPropagation()}>
 
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-sm">

@@ -1,9 +1,86 @@
 @import "tailwindcss";
 
-:root { color-scheme: dark; }
+/* ---------------------------------------------------------------- theme
+   Apple's dark pro-app palette: graphite surfaces that layer by getting
+   LIGHTER, hairline separators rather than borders, and one accent used
+   sparingly. The video is meant to be the brightest thing on screen, which is
+   why every professional video tool is dark.
+
+   The accent is redefined here as Tailwind's `indigo` ramp rather than being
+   renamed. Every `bg-indigo-500` already in the app becomes Apple's system
+   purple with no file touched, so the colour lives in exactly one place and
+   cannot drift between the two front ends. */
+@theme {
+  --color-indigo-50:  #faf4ff;
+  --color-indigo-100: #f3e6ff;
+  --color-indigo-200: #e7ccfd;
+  --color-indigo-300: #dda9f7;
+  --color-indigo-400: #ce7ef5;
+  --color-indigo-500: #bf5af2;   /* systemPurple, dark */
+  --color-indigo-600: #a845d9;
+  --color-indigo-700: #8e37b8;
+  --color-indigo-800: #722e94;
+  --color-indigo-900: #5a2475;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces layer by lightening, the way macOS and iOS do. */
+  --ground: #141416;
+  --panel: #1c1c1e;
+  --raised: #2c2c2e;
+  --hairline: rgb(255 255 255 / 0.10);
+  --label: #f5f5f7;
+  --label-2: rgb(235 235 245 / 0.6);
+  --label-3: rgb(235 235 245 / 0.3);
+  --accent: #bf5af2;
+}
 
 html, body, #root { height: 100%; }
-body { margin: 0; background: #0f1116; color: #e6e8ee; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--label);
+  /* SF on Apple hardware, the platform UI face everywhere else. Never a
+     webfont: the system face is the one that looks native, and it costs
+     nothing to load. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
+    "Segoe UI", Inter, system-ui, "Noto Sans", "Helvetica Neue", Arial,
+    "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  /* Apple's UI type is optically lighter than a browser default; without
+     antialiasing it reads heavy and muddy on graphite. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+/* Numbers that change in place - timecodes, durations, sizes - must not make
+   the layout twitch as they tick. */
+.font-mono, code, kbd, samp {
+  font-family: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* Hairlines, not borders. Apple separators are a single device pixel and stay
+   that way when the screen is 2x or 3x - a 1px CSS border becomes a visible
+   2px rule on a phone and is the fastest way to look like a web page. */
+@media (min-resolution: 2dppx) {
+  .border, .border-t, .border-b, .border-l, .border-r,
+  .border-white\/10, .border-white\/5, .border-white\/15 {
+    border-width: 0.5px;
+  }
+}
+
+/* Panels read as layered material rather than outlined boxes. */
+.bg-\[\#1c1c1e\] {
+  background-color: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
 
 /* The phone's timecode wheels scroll but must not show a bar: at 56px wide a
    scrollbar is most of the column. */
@@ -57,16 +134,18 @@ input[type="checkbox"] {
   width: 1.15rem;
   height: 1.15rem;
   flex: none;
-  border-radius: 0.375rem;
-  border: 1px solid rgb(255 255 255 / 0.25);
-  background: rgb(255 255 255 / 0.06);
+  /* Apple rounds controls generously; a 2px radius is what makes a checkbox
+     look like 2010. */
+  border-radius: 0.4rem;
+  border: 0.5px solid rgb(255 255 255 / 0.22);
+  background: rgb(255 255 255 / 0.07);
   cursor: pointer;
   transition: background-color .15s, border-color .15s, box-shadow .15s;
 }
 input[type="checkbox"]:hover:not(:disabled) { border-color: rgb(255 255 255 / 0.45); }
 input[type="checkbox"]:checked {
-  background-color: #6366f1;
-  border-color: #6366f1;
+  background-color: var(--accent);
+  border-color: var(--accent);
   /* Drawn as a background image rather than ::after: pseudo-elements on a
      replaced element are not dependable across browsers. */
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
@@ -99,5 +178,41 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   outline: none;
   /* No border-radius here: it would override whatever shape the element
      already has, so a pill button squared off the moment it took focus. */
-  box-shadow: 0 0 0 2px rgb(99 102 241 / 0.55);
+  box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+
+/* ---------------------------------------------------------------- material
+   The pieces that make this read as an Apple app rather than a dark website. */
+
+/* Controls and panels share one radius language: 6 for chips, 8 for buttons,
+   12 for panels and sheets. Applied to the classes already in use so the two
+   front ends both pick it up without every element being rewritten. */
+.rounded { border-radius: 0.5rem; }
+.rounded-lg { border-radius: 0.75rem; }
+.rounded-xl { border-radius: 1rem; }
+
+/* Buttons: a pressed state that moves, the way every Apple control does, and
+   a transition short enough to feel mechanical rather than animated. */
+button {
+  transition: background-color .15s ease, color .15s ease, transform .08s ease,
+    box-shadow .15s ease, opacity .15s ease;
+}
+button:not(:disabled):active { transform: scale(0.97); }
+
+/* The accent, used as a filled action, gets the subtle lift Apple gives a
+   primary button - never a flat rectangle of colour. */
+.bg-indigo-500 { box-shadow: 0 1px 0 rgb(255 255 255 / 0.14) inset, 0 1px 3px rgb(0 0 0 / 0.3); }
+
+/* Scrollbars, which are otherwise a bright Windows/Linux artefact cutting
+   through a dark panel. Firefox takes the two-value form; WebKit needs parts. */
+* { scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 0.18) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.16);
+  border-radius: 999px;
+  /* The inset keeps the thumb clear of the panel edge, as on macOS. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.28); }

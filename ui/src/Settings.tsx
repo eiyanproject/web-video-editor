@@ -734,7 +734,7 @@ export default function Settings({
         />
       )}
 
-      <div className="sticky bottom-0 -mx-6 border-t border-white/10 bg-[#0f1116] px-6 py-3">
+      <div className="sticky bottom-0 -mx-6 border-t border-white/10 bg-[#141416] px-6 py-3">
         <button onClick={save} disabled={!!busy}
           className="rounded bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400 disabled:opacity-40">
           {busy === 'save' ? 'Saving…' : 'Save settings'}

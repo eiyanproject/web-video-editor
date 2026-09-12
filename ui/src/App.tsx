@@ -91,10 +91,14 @@ const Btn = ({
     title={title}
     onClick={onClick}
     disabled={disabled}
-    className={`shrink-0 rounded px-2 py-1 text-xs transition disabled:opacity-30 ${
-      tone === 'accent' ? 'bg-indigo-500/80 hover:bg-indigo-500'
-        : active ? 'bg-indigo-500/40 hover:bg-indigo-500/60'
-        : 'bg-white/10 hover:bg-white/20'
+    // Apple's control hierarchy: exactly one filled button per context, and
+    // everything else quiet until you point at it. A row of equally-filled
+    // grey chips - the old treatment - gives every action the same weight and
+    // is most of what made this look like a 2015 desktop app.
+    className={`shrink-0 rounded px-2.5 py-1.5 text-[13px] font-medium leading-none transition disabled:opacity-30 ${
+      tone === 'accent' ? 'bg-indigo-500 text-white hover:bg-indigo-400'
+        : active ? 'bg-indigo-500/25 text-indigo-200 hover:bg-indigo-500/35'
+        : 'bg-white/[0.06] text-white/75 hover:bg-white/[0.12] hover:text-white'
     }`}
   >
     {children}
@@ -1269,7 +1273,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
           onClick={() => setShowHelp(false)}>
           <div onClick={(e) => e.stopPropagation()}
-            className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-white/15 bg-[#12141a] p-5 shadow-xl">
+            className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-white/15 bg-[#1c1c1e] p-5 shadow-xl">
             <div className="mb-3 flex items-center">
               <h2 className="text-base font-semibold">Keyboard</h2>
               <span className="ml-2 text-xs text-white/35">the whole flow, without the mouse</span>
@@ -1368,7 +1372,7 @@ export default function App() {
               <Btn title="More" active={showMore} onClick={() => setShowMore((v) => !v)}>⋯</Btn>
               {showMore && (
                 <div role="menu"
-                  className="absolute right-0 z-40 mt-1 w-60 overflow-hidden rounded-lg border border-white/15 bg-[#161922] py-1 shadow-xl shadow-black/40">
+                  className="absolute right-0 z-40 mt-1 w-60 overflow-hidden rounded-lg border border-white/15 bg-[#1c1c1e] py-1 shadow-xl shadow-black/40">
                   {([
                     ['📱', 'Phone editor', `Open the touch UI on port ${PHONE_PORT}`,
                       () => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener')],
@@ -1390,7 +1394,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">
+          <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-2">
             <Btn title={jobBusy ? 'A job is running' : 'Load the selected video into the editor'}
               tone="accent"
               disabled={!selected || jobBusy}
@@ -1488,7 +1492,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1 border-t border-white/10 px-2 py-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 px-3 py-2 text-xs">
                   <Btn title="Cut at the playhead (S)" tone="accent" disabled={jobBusy} onClick={splitHere}>✂ Cut here</Btn>
                   <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
                   <div className="mx-1 h-4 w-px bg-white/15" />
@@ -1875,7 +1879,7 @@ export default function App() {
 
             {shown.map((e) => (
               <div key={e.abs}
-                className={`group flex items-center gap-2 px-3 py-1.5 hover:bg-white/5 ${
+                className={`group flex items-center gap-3 px-3 py-2 transition-colors hover:bg-white/[0.06] ${
                   selected?.abs === e.abs ? 'bg-indigo-500/20' : ''
                 }`}>
                 <button
