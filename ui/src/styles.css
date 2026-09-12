@@ -21,16 +21,21 @@
    the app had emerald, amber and red at a dozen different tints, which is what
    made the interface look assembled rather than designed. */
 @theme {
-  --color-indigo-50:  #faf4ff;
-  --color-indigo-100: #f3e6ff;
-  --color-indigo-200: #e7ccfd;
-  --color-indigo-300: #dda9f7;
-  --color-indigo-400: #ce7ef5;
-  --color-indigo-500: #bf5af2;   /* systemPurple, dark */
-  --color-indigo-600: #a845d9;
-  --color-indigo-700: #8e37b8;
-  --color-indigo-800: #722e94;
-  --color-indigo-900: #5a2475;
+  /* Neon crimson. Deliberately PINK-leaning rather than pure red, because red
+     already means failure in this app - a failed job, a play error, the drop
+     action. An accent that sat in the same hue would make "the thing you are
+     doing" and "the thing that went wrong" the same colour. systemRed stays
+     orange-red below, so the two read apart at a glance. */
+  --color-indigo-50:  #fff0f4;
+  --color-indigo-100: #ffdde5;
+  --color-indigo-200: #ffb3c5;
+  --color-indigo-300: #ff7d9e;
+  --color-indigo-400: #ff4d78;
+  --color-indigo-500: #ff2e5b;   /* neon crimson */
+  --color-indigo-600: #e01a45;
+  --color-indigo-700: #b81238;
+  --color-indigo-800: #8f0d2b;
+  --color-indigo-900: #6b0920;
 
   /* systemGreen / systemOrange / systemRed, dark variants. */
   --color-emerald-100: #d6f7e0;
@@ -61,7 +66,8 @@
   --label: #f5f5f7;
   --label-2: rgb(235 235 245 / 0.6);
   --label-3: rgb(235 235 245 / 0.3);
-  --accent: #bf5af2;
+  --accent: #ff2e5b;
+  --accent-glow: rgb(255 46 91 / 0.45);
 }
 
 html, body, #root { height: 100%; }
@@ -264,3 +270,31 @@ button:not(:disabled):active { transform: scale(0.97); }
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.28); }
+
+
+/* ---------------------------------------------------------------- neon
+   A restrained amount. The base stays graphite and the type stays plain; what
+   makes it read as neon is that the accent EMITS rather than just fills -
+   which is one shadow, on the few things that are already accent-coloured.
+   Applied any wider it stops being an accent. */
+
+.bg-indigo-500 {
+  box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12) inset,
+              0 0 12px -2px var(--accent-glow),
+              0 1px 3px rgb(0 0 0 / 0.4);
+}
+.bg-indigo-500:hover { box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.18) inset, 0 0 18px -2px var(--accent-glow), 0 1px 3px rgb(0 0 0 / 0.4); }
+
+/* The playhead and the active-pane edge are hairlines, so a glow is the only
+   way they register as lit rather than merely coloured. */
+.bg-indigo-300, .bg-indigo-400 { box-shadow: 0 0 8px -1px var(--accent-glow); }
+
+/* Section labels in the pro-app idiom: small, wide-tracked, uppercase. Cheap,
+   and it does more for the register than any amount of colour. */
+.label-caps {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgb(235 235 245 / 0.35);
+}

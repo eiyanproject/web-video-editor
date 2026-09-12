@@ -84,10 +84,10 @@ export const PHONE_PORT = Number(import.meta.env.VITE_PHONE_PORT ?? 5274)
  */
 export const PALETTE = {
   /** systemPurple. Selection, the playhead, anything the user is acting on. */
-  accent: 'rgb(191, 90, 242)',
-  accentSoft: 'rgba(191, 90, 242, 0.32)',
-  accentStrong: 'rgba(191, 90, 242, 0.55)',
-  accentLight: 'rgb(221, 169, 247)',
+  accent: 'rgb(255, 46, 91)',
+  accentSoft: 'rgba(255, 46, 91, 0.30)',
+  accentStrong: 'rgba(255, 46, 91, 0.52)',
+  accentLight: 'rgb(255, 125, 158)',
   /** systemGreen. Reserved for "this is free / this succeeded" and nothing else. */
   ok: 'rgb(48, 209, 88)',
   /** systemOrange. A cost, not an error. */

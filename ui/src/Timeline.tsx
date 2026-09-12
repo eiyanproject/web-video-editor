@@ -281,7 +281,7 @@ export default function Timeline({
           slack made a 250px box that is almost entirely empty - the track is
           thin by nature, so extra height buys nothing and just moves the dead
           space from below the timeline into it. */}
-      <div ref={wrapRef} className="relative h-20 w-full px-2">
+      <div ref={wrapRef} className="relative h-14 w-full px-2">
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: '100%' }}

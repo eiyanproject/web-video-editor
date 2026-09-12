@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Icon, { type IconName } from './Icon'
+import Activity from './Activity'
 import { track, installTelemetryFlush } from './lib/telemetry'
 import Settings from './Settings'
 import Logs from './Logs'
@@ -416,11 +417,23 @@ export default function App() {
   const [mainSplit, setMainSplit] = useState(0.5)
   const mainRowRef = useRef<HTMLDivElement>(null)
 
-  // The segment list must never decide how tall the row is - that is what used
-  // to shove the timeline off the bottom once a few cuts existed. It was solved
-  // by measuring the picture and pinning the list to it; the row is now
-  // `min-h-0 flex-1` and the list scrolls inside, which holds the same
-  // invariant without a ResizeObserver and lets the list use the slack.
+  // The segment list must never decide how tall the row is - that is what was
+  // shoving the timeline off the bottom of the screen once a few cuts existed.
+  // Measure the picture and give the list exactly that height to scroll within.
+  //
+  // Tried letting the row stretch instead so the list could use the slack; that
+  // pushed every control below it to the bottom of the pane and left a void
+  // under the player, which is worse than the gap it was meant to fix. The
+  // controls belong directly under the picture.
+  const [videoH, setVideoH] = useState(0)
+  useEffect(() => {
+    const el = editVideoRef.current
+    if (!el) { setVideoH(0); return }
+    const ro = new ResizeObserver(() => setVideoH(el.clientHeight))
+    ro.observe(el)
+    setVideoH(el.clientHeight)
+    return () => ro.disconnect()
+  }, [loaded?.abs, editSplit, editDuration])
 
   const startSplitDrag = (e: React.MouseEvent) => beginSplitDrag(e, editRowRef, setEditSplit)
   const { segs, setSegs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
@@ -1537,8 +1550,8 @@ export default function App() {
                 {/* shrink-0, not flex-1: the row is exactly as tall as the
                     picture, so the controls sit hard against the player instead
                     of floating below a column of empty black. */}
-                <div ref={editRowRef} className="flex min-h-0 flex-1 items-stretch">
-                  <div className="min-w-0 self-start bg-black" style={{ width: `${editSplit * 100}%` }}>
+                <div ref={editRowRef} className="flex shrink-0">
+                  <div className="min-w-0 bg-black" style={{ width: `${editSplit * 100}%` }}>
                     {/* No max-height: clamping the height of a w-full video
                         reintroduces the letterbox it was meant to remove. */}
                     <div className="w-full bg-black">
@@ -1581,11 +1594,10 @@ export default function App() {
                     <div className="absolute inset-y-0 -left-1 -right-1" />
                   </div>
 
-                  {/* Pinned to the player's height before; now it takes the
-                      row's, so the space the editor used to leave empty below
-                      the timeline becomes list you can actually put cuts in.
-                      The player still sits at its own aspect, top-aligned. */}
-                  <div className="flex min-w-0 flex-1 flex-col self-stretch overflow-hidden border-l border-white/10">
+                  <div
+                    className="flex min-w-0 flex-1 flex-col overflow-hidden border-l border-white/10"
+                    style={videoH ? { height: videoH } : undefined}
+                  >
                     <SegmentList
                       segs={segs}
                       duration={editDuration}
@@ -1680,7 +1692,12 @@ export default function App() {
                   selectedId={selectedSeg}
                 />
 
-
+                {/* The slack. The export strip is pinned to the bottom and the
+                    controls belong under the picture, so the middle was always
+                    going to be empty - this makes it the thing you want open
+                    while an export runs, instead of a reason to leave for the
+                    Log page. */}
+                <Activity />
                 <ExportPanel
                   source={loaded.abs}
                   segs={segs}

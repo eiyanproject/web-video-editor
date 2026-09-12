@@ -117,13 +117,13 @@ export default function Scrubber({
     : null
 
   return (
-    <div className="select-none px-3 py-2">
+    <div className="select-none px-3 py-1.5">
       <div
         ref={trackRef}
         onMouseMove={(e) => { setHoverT(timeAt(e.clientX)); setHoverX(e.clientX) }}
         onMouseLeave={() => setHoverT(null)}
         onClick={(e) => onSeek(timeAt(e.clientX))}
-        className="relative h-10 cursor-pointer overflow-hidden rounded bg-white/10"
+        className="relative h-7 cursor-pointer overflow-hidden rounded-lg bg-white/[0.07]"
       >
         {/* Audio envelope: silence and scene changes are visible at a glance. */}
         {!!peaks?.length && (
