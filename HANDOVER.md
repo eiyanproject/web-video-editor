@@ -169,6 +169,24 @@ keyframe index over the share the job is already using - and a cut list edited m
 is no longer the one being exported. Both poll `/api/jobs` even when they started
 nothing, since a job launched from any device has to lock the others.
 
+**Analysis is capped too, not just exports.** The keyframe index, sprite sheets, the
+waveform and the deep check all read a file end to end, and they were completely
+ungoverned: every tab and phone pointed at the server could start its own ffmpeg over
+the same share, on top of whatever was exporting. They now queue behind
+`max_parallel_analysis` (default 1). Each one re-checks its cache *after* taking a slot,
+which makes the gate a deduplicator for free - three devices opening the same clip at
+once produce one ffmpeg run and three cache hits, measured.
+
+**The queue has a depth ceiling as well as a width one.** Concurrency caps what runs;
+nothing capped the list itself, so a retrying client or a double-fired batch could pile
+up thousands of pending jobs. Past `MAX_PENDING_JOBS` a new export is refused with an
+error the caller sees immediately.
+
+**Queued jobs wait on a notification, not a timer.** They used to re-check twice a
+second, each taking the jobs lock and counting - at the 250-job ceiling that is 125k
+comparisons a second to learn nothing changed. A `Notify` woken when any job ends
+replaces it, with a 5s timeout as a backstop so a lost wake-up cannot strand the queue.
+
 **Nothing expensive happens by accident.** Selecting a file costs a header read.
 Anything that reads the whole file — keyframe index, thumbnails, waveform — needs an
 explicit action: the index waits for *Load into editor*, thumbnails for a button, the
@@ -183,6 +201,19 @@ real error and left alone until you press Reconnect.
 
 **Every capability has a visible control**, and every empty state says what happened and
 offers the button that fixes it. See `PLAN.md` §3.3–3.6.
+
+**The key the user TYPED wins; the physical position is only a fallback.** `e.key` is
+what the layout produced, `e.code` is where the key sits, and the position is consulted
+only when `e.key` is not a shortcut character at all. Taking either one unconditionally
+breaks every non-QWERTY Latin layout: on Dvorak the key that types `u` sits at QWERTY's
+`KeyF`, so `u` (unload) jumped into the file list instead; on QWERTZ the y/z swap made
+`Ctrl+Y` fire undo. The fallback still rescues what it was added for - a kana IME and a
+JIS key pressed under a US layout both produce characters that are no shortcut.
+
+**AltGr is composing a character, not asking for a shortcut.** Windows reports it as
+Ctrl+Alt, so without an explicit bail-out `AltGr+S` on a German or Polish layout reached
+the Ctrl+S branch and saved instead of typing. Linux sets a real `AltGraph` modifier;
+both are checked.
 
 **Shortcuts match `e.key` OR the US-QWERTY character for `e.code`, and bail out while an
 IME is composing.** `e.key` is what the layout produced; `e.code` is where the key sits.

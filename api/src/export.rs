@@ -159,6 +159,11 @@ pub struct Jobs {
     /// admitted in the same instant both see the same free slot and both take
     /// it.
     admission: Arc<Mutex<()>>,
+    /// Woken when a slot frees. Without it every queued job re-checked on a
+    /// timer, so a full queue spent its whole wait taking the jobs lock and
+    /// counting - 250 queued jobs polling twice a second is 125k comparisons
+    /// per second to discover nothing changed.
+    slot_free: Arc<tokio::sync::Notify>,
 }
 
 fn now() -> u64 {
@@ -228,7 +233,14 @@ async fn wait_for_slot(st: &AppState, id: &str) -> bool {
                 j.message = format!("waiting — {running} job(s) already running");
             })
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Woken the moment a job ends. The timeout is a backstop only, so a
+        // notification lost to a race cannot strand the queue forever.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            st.jobs.slot_free.notified(),
+        )
+        .await;
     }
 }
 
@@ -1070,6 +1082,10 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
     }
 }
 
+/// Most anyone legitimately queues at once is a batch remux of one folder.
+/// Past this, something is looping.
+const MAX_PENDING_JOBS: usize = 250;
+
 // ---------------------------------------------------------------- handlers
 
 pub async fn start_export(
@@ -1081,6 +1097,26 @@ pub async fn start_export(
     }
     if req.output_dir.trim().is_empty() {
         return Err(ApiError::Bad("no output folder set - Settings → Export destination".into()));
+    }
+
+    // A ceiling on the queue itself, not just on what runs.
+    //
+    // The concurrency cap stops the box being overwhelmed, but nothing stopped
+    // the LIST growing without bound: a stuck client retrying, or a batch fired
+    // twice, could pile up thousands of pending jobs that would then work
+    // through one by one for days. Refusing past a sane depth turns that into
+    // an error the caller sees immediately.
+    {
+        let m = st.jobs.map.read().await;
+        let pending = m
+            .values()
+            .filter(|j| j.status == "running" || j.status == "queued")
+            .count();
+        if pending >= MAX_PENDING_JOBS {
+            return Err(ApiError::Bad(format!(
+                "{pending} jobs are already queued - wait for those to finish, or cancel some"
+            )));
+        }
     }
 
     let id = format!("{:x}", now() as u128 * 1000 + (rand_suffix() as u128));
@@ -1125,6 +1161,8 @@ pub async fn start_export(
                 })
                 .await;
         }
+        // Whatever happened - finished, failed, panicked - a slot just freed.
+        st2.jobs.slot_free.notify_waiters();
     });
 
     Ok(Json(serde_json::json!({ "id": id })))
@@ -1163,6 +1201,7 @@ pub async fn cancel_job(
             }
         })
         .await;
+    st.jobs.slot_free.notify_waiters();
     tracing::info!("export {id} cancelled (process killed: {killed})");
     Json(serde_json::json!({ "ok": true }))
 }

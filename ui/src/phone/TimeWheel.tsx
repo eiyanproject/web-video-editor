@@ -37,16 +37,31 @@ function Wheel({
     if (Math.abs(el.scrollTop - top) > 1) el.scrollTop = top
   }, [value])
 
+  const commit = () => {
+    scrolling.current = false
+    const el = ref.current
+    if (!el) return
+    const i = Math.max(0, Math.min(max, Math.round(el.scrollTop / ITEM)))
+    if (i !== value) onChange(i)
+  }
+
+  // Both signals, always, rather than picking one.
+  //
+  // `scrollend` fires once when the platform says the scroll is genuinely over
+  // - momentum, snap animation and all - so where it exists the wheel commits
+  // the instant it settles instead of after a fixed wait.
+  //
+  // The timer still runs underneath it. Relying on `scrollend` alone puts the
+  // only path to committing a value behind one event: if the browser does not
+  // fire it, or React has not wired it on this element, the wheel silently
+  // stops working. `commit` is idempotent, so whichever arrives first wins and
+  // the other is a no-op. 220ms because iOS momentum can go quiet for well over
+  // a tenth of a second mid-flick, and committing in one of those gaps snaps
+  // the wheel to whatever it was passing over.
   const onScroll = () => {
     scrolling.current = true
     if (settle.current) clearTimeout(settle.current)
-    settle.current = window.setTimeout(() => {
-      scrolling.current = false
-      const el = ref.current
-      if (!el) return
-      const i = Math.max(0, Math.min(max, Math.round(el.scrollTop / ITEM)))
-      if (i !== value) onChange(i)
-    }, 130)
+    settle.current = window.setTimeout(commit, 220)
   }
 
   return (
@@ -58,6 +73,7 @@ function Wheel({
         <div
           ref={ref}
           onScroll={onScroll}
+          onScrollEnd={commit}
           className={`no-scrollbar snap-y snap-mandatory overflow-y-scroll overscroll-contain ${width}`}
           style={{ height: ITEM * VISIBLE }}
         >

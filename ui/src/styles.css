@@ -9,3 +9,95 @@ body { margin: 0; background: #0f1116; color: #e6e8ee; }
    scrollbar is most of the column. */
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* ---------------------------------------------------------------- touch
+   Everything below is for the phone/tablet front end. The desktop app shares
+   this stylesheet but none of it changes a mouse-and-keyboard layout. */
+
+/* Safari inflates text when a phone rotates to landscape unless told not to,
+   which silently breaks every fixed-height row in the editor. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* Pull-to-refresh reloading the page mid-edit loses the cut list that has not
+   autosaved yet. The inner scrollers already contain their own overscroll;
+   this stops the document itself from bouncing into a refresh. */
+html, body { overscroll-behavior-y: none; }
+
+/* Android and iOS paint a grey flash on every tap. */
+body { -webkit-tap-highlight-color: transparent; }
+
+/* Full viewport height, with a fallback for iOS before 15.4, where dvh does
+   not exist and 100vh is the best available answer. */
+.h-screen-dynamic { height: 100vh; height: 100dvh; }
+
+/* Removes the ~300ms double-tap-to-zoom wait on controls without disabling
+   pinch-zoom for the page, which is what a locked viewport would have done. */
+button, [role="button"], input, select { touch-action: manipulation; }
+
+/* The notch, the rounded corners and the home indicator. viewport-fit=cover
+   lets the background reach them; these keep the CONTENT clear. Zero on every
+   device without insets, so nothing shifts on Android or a tablet. */
+.pad-top-safe { padding-top: env(safe-area-inset-top, 0px); }
+.pad-bottom-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.pad-x-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.mb-bottom-safe { margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem); }
+
+/* ---------------------------------------------------------------- controls
+   Native checkboxes and selects render with the OS widget, which on Linux and
+   Windows is a light-grey 1990s box sitting in a dark editor. These restyle the
+   real elements rather than replacing them with divs, so labels, keyboard
+   focus, tab order and screen readers all keep working exactly as before. */
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+  border-radius: 0.375rem;
+  border: 1px solid rgb(255 255 255 / 0.25);
+  background: rgb(255 255 255 / 0.06);
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, box-shadow .15s;
+}
+input[type="checkbox"]:hover:not(:disabled) { border-color: rgb(255 255 255 / 0.45); }
+input[type="checkbox"]:checked {
+  background-color: #6366f1;
+  border-color: #6366f1;
+  /* Drawn as a background image rather than ::after: pseudo-elements on a
+     replaced element are not dependable across browsers. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
+  background-size: 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 1.6rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%239aa1ad' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M4 6.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-size: 0.85rem;
+  background-position: right 0.45rem center;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+/* The spinner arrows are unusable at this size and only ever get hit by
+   accident; the field is typed into or driven by the stepper buttons. */
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* One focus treatment everywhere, replacing the browser's default outline
+   which on some Linux themes is a black dotted line that vanishes on dark. */
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: none;
+  /* No border-radius here: it would override whatever shape the element
+     already has, so a pill button squared off the moment it took focus. */
+  box-shadow: 0 0 0 2px rgb(99 102 241 / 0.55);
+}

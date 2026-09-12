@@ -266,19 +266,24 @@ export default function PhoneApp() {
   return (
     // 100dvh, not 100vh: the mobile URL bar is part of the viewport in vh and
     // crops the bottom of the layout as it hides and shows.
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-[#0b0d12] text-white">
+    <div className="h-screen-dynamic pad-x-safe flex flex-col overflow-hidden bg-[#0b0d12] text-white">
 
-      <header className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
+      <header className="pad-top-safe flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
         <span className="text-sm font-semibold">Video Editor</span>
-        <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/40">phone</span>
+        <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/40">touch</span>
         <div className="flex-1" />
         <Tap onClick={() => setSheet(true)} tone="accent">📁 Files</Tap>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      {/* One column on a phone. From 768px - every tablet in portrait, and a
+          phone in landscape - the player and the editor sit side by side
+          instead, because a single 1024px-wide column is mostly empty margin
+          and puts the cut controls below the fold. Same components either way;
+          only the flow direction changes. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain md:flex md:items-start md:gap-0 md:overflow-hidden">
 
         {/* ---- player ------------------------------------------------------ */}
-        <section>
+        <section className="md:h-full md:w-1/2 md:shrink-0 md:overflow-y-auto md:overscroll-contain md:border-r md:border-white/10">
           <div className="w-full bg-black" style={{ aspectRatio: String(aspect) }}>
             {selected ? (
               <video
@@ -343,7 +348,7 @@ export default function PhoneApp() {
         </section>
 
         {/* ---- editor ------------------------------------------------------ */}
-        <section className="border-t border-white/10 pb-8">
+        <section className="pad-bottom-safe border-t border-white/10 pb-8 md:h-full md:w-1/2 md:overflow-y-auto md:overscroll-contain md:border-t-0">
           <div className="flex items-center gap-2 px-3 py-2">
             <span className="text-xs font-medium text-white/55">Editor</span>
             <div className="flex-1" />
@@ -536,8 +541,8 @@ export default function PhoneApp() {
 
       {/* ---- file sheet ---------------------------------------------------- */}
       {sheet && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12]">
-          <header className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
+        <div className="pad-x-safe fixed inset-0 z-50 flex flex-col bg-[#0b0d12] md:inset-y-8 md:left-1/2 md:w-[36rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-xl md:border md:border-white/15 md:shadow-2xl">
+          <header className="pad-top-safe flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 md:pt-2">
             <Tap onClick={() => openDir(parent ?? '')} disabled={!parent && cwd === ''}>↑</Tap>
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs text-white/50">{cwd || 'Your library'}</div>
@@ -545,7 +550,7 @@ export default function PhoneApp() {
             <Tap onClick={() => setSheet(false)}>✕</Tap>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="pad-bottom-safe min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {loading && <div className="p-4 text-sm text-white/40">Loading…</div>}
             {error && (
               <div className="m-3 rounded-lg border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-200">
@@ -593,7 +598,7 @@ export default function PhoneApp() {
       )}
 
       {toast && (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-white/15 px-4 py-2 text-xs backdrop-blur">
+        <div className="mb-bottom-safe pointer-events-none fixed bottom-0 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-white/15 px-4 py-2 text-xs backdrop-blur">
           {toast}
         </div>
       )}

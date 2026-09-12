@@ -220,6 +220,24 @@ export default function App() {
   }, [!!runningJob])
   const jobBusy = !!runningJob
 
+  // The overflow menu. Closes on an outside click or Escape, because a menu
+  // that only closes by re-pressing its own button is a menu people leave open.
+  const [showMore, setShowMore] = useState(false)
+  const moreRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!showMore) return
+    const away = (ev: MouseEvent) => {
+      if (!moreRef.current?.contains(ev.target as Node)) setShowMore(false)
+    }
+    const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setShowMore(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [showMore])
+
   const [showPhoneHint, setShowPhoneHint] = useState(false)
   useEffect(() => {
     if (localStorage.getItem(PHONE_HINT_OFF) === '1') return
@@ -736,7 +754,20 @@ export default function App() {
         // shifted digit is punctuation, not an export mode.
         phys = phys === '/' ? '?' : /^[a-z]$/.test(phys) ? phys : ''
       }
-      const is = (c: string) => k === c || phys === c
+
+      // The position is a FALLBACK, not an equal partner: it is consulted only
+      // when the layout produced something that is not a shortcut character at
+      // all.
+      //
+      // Taking either unconditionally breaks every non-QWERTY Latin layout. On
+      // Dvorak the key that types 'u' sits at QWERTY's KeyF, so pressing u -
+      // unload - matched 'f' first and jumped into the file list instead. On
+      // QWERTZ the same thing swaps y and z, and Ctrl+Y fired undo. Preferring
+      // what the user actually typed fixes both, and still rescues the cases
+      // the fallback was added for: a kana IME produces a character that is no
+      // shortcut, and so does a JIS key pressed under a US layout.
+      const typed = k.length === 1 && /^[a-z0-9/[\],.?]$/.test(k)
+      const is = (c: string) => k === c || (!typed && phys === c)
 
       // Only keys the browser would otherwise act on get cancelled. A plain
       // letter has no default worth taking, so those are left alone and every
@@ -807,6 +838,12 @@ export default function App() {
         v.currentTime = t
         isEditor ? setEditTime(t) : setCurTime(t)
       }
+
+      // AltGr is composing a character, never asking for a shortcut - but
+      // Windows reports it as Ctrl+Alt, so without this AltGr+S on a German or
+      // Polish layout reached the Ctrl+S branch and "saved" instead of typing.
+      // Linux sets a real AltGraph modifier; check both.
+      if (e.getModifierState?.('AltGraph') || (e.ctrlKey && e.altKey)) return
 
       if (e.ctrlKey || e.metaKey) {
         // Ctrl + arrows: one second, for placing a cut without hunting.
@@ -1321,17 +1358,36 @@ export default function App() {
               Batch remux
             </button>
             <div className="flex-1" />
-            {/* Same host, different port: the phone UI is a separate front end,
-                so this is a plain link rather than a route. Built from the
-                current hostname so it works over the LAN, where the phone
-                actually is, instead of pointing at localhost. */}
-            <Btn title={`Open the phone UI (port ${PHONE_PORT}) — scan or send this to your phone`}
-              onClick={() => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener')}>
-              📱 Phone
-            </Btn>
-            <Btn title="Keyboard shortcuts (?)" onClick={() => setShowHelp(true)}>⌨ ?</Btn>
-            <Btn title="Show the application log: mounts, saves, errors" onClick={() => setPage('logs')}>📋 Log</Btn>
+            {/* Settings stays a button because it is the one people reach for
+                often. The rest - the phone link, the shortcut sheet, the log -
+                are occasional, and as loose buttons they overflowed this row
+                the moment the window got narrow, which is exactly when the
+                phone link is the thing you need. */}
             <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>
+            <div className="relative" ref={moreRef}>
+              <Btn title="More" active={showMore} onClick={() => setShowMore((v) => !v)}>⋯</Btn>
+              {showMore && (
+                <div role="menu"
+                  className="absolute right-0 z-40 mt-1 w-60 overflow-hidden rounded-lg border border-white/15 bg-[#161922] py-1 shadow-xl shadow-black/40">
+                  {([
+                    ['📱', 'Phone editor', `Open the touch UI on port ${PHONE_PORT}`,
+                      () => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener')],
+                    ['⌨', 'Keyboard shortcuts', 'Also ? or F1', () => setShowHelp(true)],
+                    ['📋', 'Application log', 'Mounts, saves and errors', () => setPage('logs')],
+                  ] as const).map(([icon, label, hint, act]) => (
+                    <button key={label} role="menuitem"
+                      onClick={() => { setShowMore(false); act() }}
+                      className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-white/10">
+                      <span className="w-5 shrink-0 text-center text-white/60">{icon}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs text-white/85">{label}</span>
+                        <span className="block truncate text-[10px] text-white/35">{hint}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">

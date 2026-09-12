@@ -396,6 +396,22 @@ pub async fn get_keyframes(
         }
     }
 
+    // Wait for a free analysis slot before reading the file end to end.
+    let _slot = {
+        let limit = st.settings.read().await.max_parallel_analysis;
+        st.limits.analysis(limit).await
+    };
+    // Re-check the cache now the slot is ours. If an identical request was
+    // ahead of us in the queue it has already written the index, and this is
+    // where two devices opening the same clip stop being two ffmpeg runs.
+    if !q.refresh {
+        if let Ok(s) = tokio::fs::read_to_string(&file).await {
+            if let Ok(v) = serde_json::from_str::<Keyframes>(&s) {
+                return Ok(Json(v));
+            }
+        }
+    }
+
     let t0 = std::time::Instant::now();
     // Demux only, no decoding: even a two-hour file takes a couple of seconds.
     let out = tokio::process::Command::new("ffprobe")
@@ -596,7 +612,14 @@ pub async fn get_sprites(
     let st2 = st.clone();
     let p2 = p.clone();
     tokio::spawn(async move {
-        build_sprites(p2.clone(), dir, probe).await;
+        // Taken inside the task, not before it: the request returns
+        // immediately with done:false and the UI polls, so blocking the
+        // handler on a slot would stall the browser instead of the work.
+        {
+            let limit = st2.settings.read().await.max_parallel_analysis;
+            let _slot = st2.limits.analysis(limit).await;
+            build_sprites(p2.clone(), dir, probe).await;
+        }
         st2.sprite_jobs.write().await.remove(&p2);
     });
 
@@ -758,6 +781,21 @@ pub async fn get_waveform(
         return Ok(Json(Waveform::default()));
     }
 
+    // Decoding the audio reads the whole file, so it queues behind any other
+    // analysis rather than piling on.
+    let _slot = {
+        let limit = st.settings.read().await.max_parallel_analysis;
+        st.limits.analysis(limit).await
+    };
+    // Someone ahead of us may have just built it.
+    if !q.refresh {
+        if let Ok(s) = tokio::fs::read_to_string(&file).await {
+            if let Ok(v) = serde_json::from_str::<Waveform>(&s) {
+                return Ok(Json(v));
+            }
+        }
+    }
+
     let probe = run_probe(&p).await?;
     if probe.audio.is_empty() {
         return Err(ApiError::Bad("this file has no audio".into()));
@@ -852,6 +890,10 @@ pub async fn deep_check(
     Json(q): Json<DeepQuery>,
 ) -> Result<Json<DeepCheck>, ApiError> {
     let p = to_real_path(&st, "", &q.path).await?;
+    let _slot = {
+        let limit = st.settings.read().await.max_parallel_analysis;
+        st.limits.analysis(limit).await
+    };
     let t0 = std::time::Instant::now();
     let mut errors = Vec::new();
     let window = 20.0f64;

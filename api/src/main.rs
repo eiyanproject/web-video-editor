@@ -111,6 +111,13 @@ pub struct Settings {
     pub default_password: String,
     #[serde(default)]
     pub default_domain: String,
+    /// How many whole-file ANALYSES may run at once: keyframe index, sprite
+    /// sheets, waveform, deep check. Separate from the export cap because they
+    /// are different work - analysis is a read, an export is a read plus a
+    /// write - but the same principle: one at a time by default, so opening a
+    /// clip on three devices cannot start three scans of the same share.
+    #[serde(default = "one")]
+    pub max_parallel_analysis: usize,
     /// How many exports or remuxes may run at once.
     ///
     /// One by default, and one is the right answer on a small box: the work is
@@ -137,6 +144,7 @@ impl Default for Settings {
             autosave_edits: true,
             waveform_auto: false,
             max_parallel_jobs: 1,
+            max_parallel_analysis: 1,
         }
     }
 }
@@ -267,6 +275,56 @@ pub struct ShareState {
     pub ever_checked: bool,
 }
 
+/// Hard ceiling on whole-file analysis.
+///
+/// Exports have their own queue; this covers everything ELSE that reads a file
+/// end to end - the keyframe index, sprite sheets, the waveform and the deep
+/// check. Without it those were completely ungoverned: every browser tab and
+/// phone pointed at the server could start its own ffmpeg over the same share
+/// at the same time, on top of whatever the export queue was already running.
+///
+/// A counter rather than a Semaphore because the limit is a live setting, and
+/// a Semaphore's permit count can be grown but never shrunk.
+#[derive(Clone, Default)]
+pub struct Limits {
+    running: Arc<Mutex<usize>>,
+}
+
+/// Releases the slot when it goes out of scope, including on an early return
+/// or an error path - which is the whole reason this is a guard and not a pair
+/// of calls someone has to remember to balance.
+pub struct AnalysisSlot(Arc<Mutex<usize>>);
+
+impl Drop for AnalysisSlot {
+    fn drop(&mut self) {
+        if let Ok(mut n) = self.0.lock() {
+            *n = n.saturating_sub(1);
+        }
+    }
+}
+
+impl Limits {
+    /// Waits for a free analysis slot. Callers should re-check their cache
+    /// after this returns: if an identical request was queued ahead of them it
+    /// has already done the work, and the answer is now simply on disk.
+    pub async fn analysis(&self, limit: usize) -> AnalysisSlot {
+        loop {
+            {
+                let mut n = self.running.lock().unwrap();
+                if *n < limit.max(1) {
+                    *n += 1;
+                    return AnalysisSlot(self.running.clone());
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    pub fn in_flight(&self) -> usize {
+        self.running.lock().map(|n| *n).unwrap_or(0)
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
@@ -277,6 +335,7 @@ pub struct AppState {
     /// a duplicate ffmpeg over the same (often network-backed) file.
     pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
     pub jobs: export::Jobs,
+    pub limits: Limits,
 }
 
 fn now_secs() -> u64 {
@@ -666,6 +725,7 @@ struct SettingsPublic {
     autosave_edits: bool,
     waveform_auto: bool,
     max_parallel_jobs: usize,
+    max_parallel_analysis: usize,
 }
 
 async fn is_mounted(mp: &str) -> bool {
@@ -716,6 +776,7 @@ async fn get_settings(State(st): State<AppState>) -> Json<SettingsPublic> {
         autosave_edits: s.autosave_edits,
         waveform_auto: s.waveform_auto,
         max_parallel_jobs: s.max_parallel_jobs.max(1),
+        max_parallel_analysis: s.max_parallel_analysis.max(1),
     })
 }
 
@@ -746,6 +807,8 @@ struct SettingsUpdate {
     waveform_auto: Option<bool>,
     #[serde(default)]
     max_parallel_jobs: Option<usize>,
+    #[serde(default)]
+    max_parallel_analysis: Option<usize>,
 }
 
 async fn put_settings(
@@ -803,6 +866,7 @@ async fn put_settings(
         // Clamped here as well as in the UI: a 0 posted by anything else would
         // stall the queue forever, since no job could ever claim a slot.
         if let Some(v) = u.max_parallel_jobs { s.max_parallel_jobs = v.clamp(1, 8); }
+        if let Some(v) = u.max_parallel_analysis { s.max_parallel_analysis = v.clamp(1, 8); }
     }
     let s = st.settings.read().await.clone();
     save_settings(&st.config_path, &s)
@@ -1179,6 +1243,7 @@ async fn main() -> anyhow::Result<()> {
         status: Arc::new(RwLock::new(std::collections::HashMap::new())),
         sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         jobs: export::Jobs::default(),
+        limits: Limits::default(),
     };
 
     let cache = media::cache_root();

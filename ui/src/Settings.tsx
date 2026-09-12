@@ -26,6 +26,7 @@ type SettingsData = {
   edits_dir: string
   autosave_edits: boolean
   max_parallel_jobs: number
+  max_parallel_analysis: number
   default_username: string
   default_domain: string
   has_default_password: boolean
@@ -78,6 +79,7 @@ export default function Settings({
   const [editsDir, setEditsDir] = useState('')
   const [autosaveEdits, setAutosaveEdits] = useState(true)
   const [maxJobs, setMaxJobs] = useState(1)
+  const [maxScans, setMaxScans] = useState(1)
   const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
   const [picking, setPicking] = useState<null | 'edits' | 'output'>(null)
   const [savedEdits, setSavedEdits] = useState<
@@ -117,6 +119,7 @@ export default function Settings({
     setEditsDir(d.edits_dir ?? '')
     setAutosaveEdits(d.autosave_edits ?? true)
     setMaxJobs(d.max_parallel_jobs ?? 1)
+    setMaxScans(d.max_parallel_analysis ?? 1)
     fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
@@ -155,6 +158,7 @@ export default function Settings({
         edits_dir: editsDir,
         autosave_edits: autosaveEdits,
         max_parallel_jobs: maxJobs,
+        max_parallel_analysis: maxScans,
         default_username: defUser,
         default_password: defPass,
         default_domain: defDomain,
@@ -555,6 +559,22 @@ export default function Settings({
             conversions at once. Leave it at 1 unless the box has spare cores and local
             disks — this work is I/O bound on a network share, so running two rarely
             finishes the pair any sooner.
+          </p>
+
+          <label className="mt-3 flex items-center gap-2 text-sm text-white/70">
+            <span>and at most</span>
+            <input
+              type="number" min={1} max={8} value={maxScans}
+              onChange={(e) => setMaxScans(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+              className="w-16 rounded bg-white/10 px-2 py-1 text-center outline-none"
+            />
+            <span>file scan{maxScans === 1 ? '' : 's'} at a time</span>
+          </label>
+          <p className="mt-1 text-xs leading-relaxed text-white/40">
+            Scans are the reads that are not exports: the keyframe index, thumbnail
+            sheets, the waveform and the deep check. They were previously ungoverned, so
+            opening the same clip on a laptop and a phone started two full reads of it
+            over the share, on top of whatever was exporting.
           </p>
         </div>
         {!!savedEdits.length && (

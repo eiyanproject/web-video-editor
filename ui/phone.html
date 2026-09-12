@@ -2,11 +2,20 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover so the layout reaches under a notch; maximum-scale
-         stops iOS zooming the page when a control is tapped. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <!-- viewport-fit=cover so the layout can reach under a notch; the padding
+         that keeps it clear of one comes from env(safe-area-inset-*) in the
+         layout itself.
+
+         No maximum-scale / user-scalable=no. iOS has ignored them since iOS 10
+         precisely because locking zoom breaks accessibility, so it bought
+         nothing on iPhone and only took pinch-zoom away on Android. The delay
+         it was really aimed at is gone anyway: `touch-action: manipulation`
+         on the controls kills the double-tap wait without disabling zoom. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0d12" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Video Editor — phone</title>
   </head>
   <body>
