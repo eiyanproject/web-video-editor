@@ -510,8 +510,21 @@ export default function App() {
   // the browser reset the selection to the end and every digit after the first
   // landed in the wrong field. An effect with no dependency array runs after
   // every render, which is exactly the moment needed.
+  //
+  // It also has to be applied when there is NO render. Typing a digit over the
+  // digit that is already there - 0 onto a 0 - produces an identical string,
+  // React bails out of re-rendering, the effect never runs, and the caret stays
+  // put. Every following press then overwrites that same position, so the field
+  // appears to stop dead on that digit and the ones after it can never be
+  // reached. Setting it here as well covers that case; the format is fixed
+  // width, so the position is valid against the value already in the DOM, and
+  // the effect still corrects it on the renders that do happen.
   const pendingCaret = useRef<number | null>(null)
-  const restoreCaret = (pos: number) => { pendingCaret.current = pos }
+  const restoreCaret = (pos: number) => {
+    pendingCaret.current = pos
+    const el = tcRef.current
+    if (el && document.activeElement === el) el.setSelectionRange(pos, pos)
+  }
 
   useEffect(() => {
     if (pendingCaret.current == null) return
