@@ -416,18 +416,11 @@ export default function App() {
   const [mainSplit, setMainSplit] = useState(0.5)
   const mainRowRef = useRef<HTMLDivElement>(null)
 
-  // The segment list must never decide how tall the row is - that is what was
-  // shoving the timeline off the bottom of the screen once a few cuts existed.
-  // Measure the picture and give the list exactly that height to scroll within.
-  const [videoH, setVideoH] = useState(0)
-  useEffect(() => {
-    const el = editVideoRef.current
-    if (!el) { setVideoH(0); return }
-    const ro = new ResizeObserver(() => setVideoH(el.clientHeight))
-    ro.observe(el)
-    setVideoH(el.clientHeight)
-    return () => ro.disconnect()
-  }, [loaded?.abs, editSplit, editDuration])
+  // The segment list must never decide how tall the row is - that is what used
+  // to shove the timeline off the bottom once a few cuts existed. It was solved
+  // by measuring the picture and pinning the list to it; the row is now
+  // `min-h-0 flex-1` and the list scrolls inside, which holds the same
+  // invariant without a ResizeObserver and lets the list use the slack.
 
   const startSplitDrag = (e: React.MouseEvent) => beginSplitDrag(e, editRowRef, setEditSplit)
   const { segs, setSegs, apply, undo, redo, reset, canUndo, canRedo } = useSegments(editDuration, loaded?.abs ?? '')
@@ -1487,7 +1480,7 @@ export default function App() {
         <div className={`flex min-w-0 flex-col border-t-2 ${
           activePane === 'editor' ? 'border-indigo-400/70' : 'border-transparent'
         }`} style={{ width: `${mainSplit * 100}%` }}>
-          <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+          <div className="flex items-center gap-1.5 border-b border-white/10 px-2.5 py-1.5 text-xs">
             <button className="rounded bg-indigo-500/80 px-3 py-1 font-medium text-white">Trim</button>
             <button onClick={() => setPage('batch')}
               title="Convert whole files between containers, in bulk"
@@ -1511,22 +1504,6 @@ export default function App() {
             ]} />
           </div>
 
-          <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-2">
-            <Btn title={jobBusy ? 'A job is running' : 'Load the selected video into the editor'}
-              tone="accent"
-              disabled={!selected || jobBusy}
-              onClick={() => { setLoaded(selected); say(`Loaded ${selected!.name}`) }}>
-              <Icon name="toEditor" /> Load into editor
-            </Btn>
-            <Btn title="Clear the editor (U)" disabled={!loaded} onClick={clearEditor}>
-              <Icon name="close" /> Clear
-            </Btn>
-            <div className="flex-1" />
-            <Btn title="Copy the loaded file's full path" disabled={!loaded} onClick={() => copy(loaded!.abs, 'Path')}>
-              <Icon name="copy" /> Copy path
-            </Btn>
-          </div>
-
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
@@ -1538,8 +1515,21 @@ export default function App() {
           >
             {loaded && editDuration > 0 ? (
               <>
-                <div className="truncate border-b border-white/10 px-3 py-1.5 text-xs text-white/60">
-                  {loaded.name}
+                {/* Centred, the way a document window titles itself. The menu
+                    sits on the right and carries what the removed toolbar did -
+                    clear and copy path - so nothing lost a control, it just
+                    stopped taking a whole row to say so. */}
+                <div className="relative flex items-center border-b border-white/10 px-2 py-1.5">
+                  <div className="min-w-0 flex-1 truncate text-center text-[13px] font-medium text-white/85">
+                    {loaded.name}
+                  </div>
+                  <div className="absolute right-2">
+                    <Menu label="Clip actions" items={[
+                      { icon: 'copy', label: "Copy this clip's path",
+                        onClick: () => copy(loaded.abs, 'Path') },
+                      { icon: 'close', label: 'Clear the editor', hint: 'U', onClick: clearEditor },
+                    ]} />
+                  </div>
                 </div>
 
                 {/* Movavi layout: preview on the left, segment list down the
@@ -1547,8 +1537,8 @@ export default function App() {
                 {/* shrink-0, not flex-1: the row is exactly as tall as the
                     picture, so the controls sit hard against the player instead
                     of floating below a column of empty black. */}
-                <div ref={editRowRef} className="flex shrink-0">
-                  <div className="min-w-0 bg-black" style={{ width: `${editSplit * 100}%` }}>
+                <div ref={editRowRef} className="flex min-h-0 flex-1 items-stretch">
+                  <div className="min-w-0 self-start bg-black" style={{ width: `${editSplit * 100}%` }}>
                     {/* No max-height: clamping the height of a w-full video
                         reintroduces the letterbox it was meant to remove. */}
                     <div className="w-full bg-black">
@@ -1591,10 +1581,11 @@ export default function App() {
                     <div className="absolute inset-y-0 -left-1 -right-1" />
                   </div>
 
-                  <div
-                    className="flex min-w-0 flex-1 flex-col overflow-hidden border-l border-white/10"
-                    style={videoH ? { height: videoH } : undefined}
-                  >
+                  {/* Pinned to the player's height before; now it takes the
+                      row's, so the space the editor used to leave empty below
+                      the timeline becomes list you can actually put cuts in.
+                      The player still sits at its own aspect, top-aligned. */}
+                  <div className="flex min-w-0 flex-1 flex-col self-stretch overflow-hidden border-l border-white/10">
                     <SegmentList
                       segs={segs}
                       duration={editDuration}
@@ -1609,7 +1600,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 px-2.5 py-1.5 text-xs">
                   {/* One filled button. Cutting is the verb this pane exists
                       for; undo and redo stay because a cut is the thing you
                       most often want back. The rest has a key and lives in the
@@ -1642,7 +1633,7 @@ export default function App() {
 
                 {/* Typed timecode: the mouse cannot land on a specific frame of a
                     two-hour clip, and a cut point often comes from a note. */}
-                <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+                <div className="flex items-center gap-1.5 border-b border-white/10 px-2.5 py-1.5 text-xs">
                   <input
                     ref={tcRef}
                     value={tcInput}
@@ -1690,10 +1681,6 @@ export default function App() {
                 />
 
 
-                {/* Slack goes here, below everything, so the export strip stays
-                    pinned to the bottom and the tools stay together up top. */}
-                <div className="min-h-0 flex-1" />
-
                 <ExportPanel
                   source={loaded.abs}
                   segs={segs}
@@ -1740,7 +1727,7 @@ export default function App() {
               wrapping, so the row never grows and steals height from the player. */}
           {/* Above the player: location only. The controls that act on the
               folder live with the folder, further down. */}
-          <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 text-xs">
+          <div className="flex items-center gap-1.5 border-b border-white/10 px-2.5 py-1.5 text-xs">
             <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap
                             [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <button onClick={() => openDir('')}

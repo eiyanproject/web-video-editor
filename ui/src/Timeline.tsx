@@ -248,7 +248,7 @@ export default function Timeline({
   const hoverCost = hover ? cutCost(hover.t, keyframes, fps) : null
 
   return (
-    <div className="flex flex-col">
+    <div className="flex shrink-0 flex-col">
       <div className="flex items-center gap-1 px-2 pb-1 text-[11px] text-white/40">
         <button onClick={() => zoom(0.5)} title="Zoom in (or scroll on the timeline)"
           className="rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">+</button>
@@ -277,7 +277,11 @@ export default function Timeline({
         )}
       </div>
 
-      <div ref={wrapRef} className="relative h-16 w-full px-2">
+      {/* A little taller than it was, but fixed. Letting it absorb all the
+          slack made a 250px box that is almost entirely empty - the track is
+          thin by nature, so extra height buys nothing and just moves the dead
+          space from below the timeline into it. */}
+      <div ref={wrapRef} className="relative h-20 w-full px-2">
         <canvas
           ref={canvasRef}
           style={{ width: '100%', height: '100%' }}

@@ -45,7 +45,7 @@ export default function SegmentList({
       {/* Vertical scroll only. A horizontal scrollbar in a narrow side panel is
           always a layout bug, never a feature - rows must fit whatever width
           the split is dragged to. */}
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 pb-1.5">
         {segs.map((s, i) => {
           const cost = i < segs.length - 1 ? cuts[i] : null
           return (
@@ -117,7 +117,7 @@ export default function SegmentList({
       </div>
 
       {segs.length > 1 && (
-        <div className="shrink-0 border-t border-white/10 px-2 py-1.5 text-[10px] leading-snug">
+        <div className="shrink-0 border-t border-white/10 px-2 py-1 text-[10px] leading-snug">
           {lossless ? (
             <span className="text-emerald-400">All cuts lossless — pure stream copy.</span>
           ) : (
