@@ -456,9 +456,21 @@ export default function App() {
         setSegs(normalise(d.segments, editDuration))
         editLoadedFor.current = key
         setEditSaved(d.saved_at ? new Date(d.saved_at * 1000).toLocaleString() : '')
-        say(d.stale
-          ? 'Loaded saved cuts — but the file has changed since, so check them'
-          : `Loaded saved cuts (${d.segments.length} segments)`)
+        // Cuts now match on title, so they can arrive from another copy of the
+        // same film. Say so, and say it loudest when the two clips are not even
+        // the same length - that is the case where applying them is wrong.
+        const n = d.segments.length
+        const byTitle = d.matched_by === 'title'
+        const lengthGap = d.duration ? Math.abs(d.duration - editDuration) : 0
+        say(
+          lengthGap > 1
+            ? `Loaded cuts saved for a ${fmtTimecode(d.duration).slice(0, 8)} copy — this one is ${fmtTimecode(editDuration).slice(0, 8)}, so check them`
+            : byTitle
+              ? `Loaded cuts saved for another copy of ${loaded?.name ?? 'this clip'} (${n} segments)`
+              : d.stale
+                ? 'Loaded saved cuts — but the file has changed since, so check them'
+                : `Loaded saved cuts (${n} segments)`,
+        )
       } catch { editLoadedFor.current = key }
     })()
     return () => { cancelled = true }

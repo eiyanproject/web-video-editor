@@ -5,7 +5,18 @@
 //! film, they survive a rebuild or a reinstall, and if the library moves to
 //! another machine the edits go with it.
 //!
-//! One file per source, named after it, so the folder stays browsable by hand.
+//! One file per TITLE, named after it, so the folder stays browsable by hand.
+//!
+//! Keyed by filename rather than by full path on purpose. The same film turns up
+//! at more than one path - a copy on another share, a reorganised folder, a
+//! second download - and cuts that only load from the exact path they were saved
+//! at are cuts you cannot find when you need them. Matching on the title means
+//! the work follows the film.
+//!
+//! The cost is real and accepted: two genuinely different files sharing a
+//! filename share a cut list. Loads that resolve by title rather than by exact
+//! path are reported back as such, so the UI can say where the cuts came from
+//! instead of quietly applying someone else's.
 
 use std::path::{Path, PathBuf};
 
@@ -44,6 +55,15 @@ pub struct SavedEdit {
     /// Set by the server on load when size/mtime no longer match.
     #[serde(default)]
     pub stale: bool,
+    /// How this edit was found: "path" when it was saved against this exact
+    /// file, "title" when it came from the same filename somewhere else. The UI
+    /// says so, because applying another copy's cuts silently is the one way
+    /// title matching can bite.
+    #[serde(default)]
+    pub matched_by: String,
+    /// The path the cuts were saved against, when that is not this file.
+    #[serde(default)]
+    pub saved_for: String,
 }
 
 fn now() -> u64 {
@@ -53,24 +73,60 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Keeps the saved name recognisable while staying unique: a basename plus a
-/// short hash of the full path, so two clips with the same filename in
-/// different folders do not collide.
-fn edit_filename(source: &Path) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    source.to_string_lossy().hash(&mut h);
+/// The title, made filesystem-safe. SMB shares dislike a good many characters.
+fn title_key(source: &Path) -> String {
     let stem = source
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "clip".into());
-    // Keep it filesystem-safe; SMB shares dislike a good many characters.
-    let safe: String = stem
-        .chars()
+    stem.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .take(80)
-        .collect();
-    format!("{safe}.{:08x}.wve.json", (h.finish() & 0xffff_ffff) as u32)
+        .collect()
+}
+
+/// Where this clip's cuts are stored: one file per title.
+fn edit_filename(source: &Path) -> String {
+    format!("{}.wve.json", title_key(source))
+}
+
+/// The old path-keyed name: title plus a hash of the full path. Still read, so
+/// edits saved before the key changed keep loading, and still deleted, so a
+/// save migrates rather than leaving a twin behind.
+fn legacy_filename(source: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.to_string_lossy().hash(&mut h);
+    format!("{}.{:08x}.wve.json", title_key(source), (h.finish() & 0xffff_ffff) as u32)
+}
+
+/// Any file this title could have been saved under, newest first.
+///
+/// Covers the legacy scheme's hash suffix, which is why this globs rather than
+/// testing one name: a clip edited at three different paths under the old key
+/// left three files, and the most recent is the one worth offering.
+async fn candidates(dir: &Path, source: &Path) -> Vec<PathBuf> {
+    let prefix = format!("{}.", title_key(source));
+    let mut found: Vec<(u64, PathBuf)> = Vec::new();
+    let Ok(mut rd) = tokio::fs::read_dir(dir).await else { return vec![] };
+    while let Ok(Some(e)) = rd.next_entry().await {
+        let p = e.path();
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
+        if !name.ends_with(".wve.json") || !name.starts_with(&prefix) {
+            continue;
+        }
+        let mtime = e
+            .metadata()
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        found.push((mtime, p));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().map(|(_, p)| p).collect()
 }
 
 /// Where edits live. Configured in Settings; empty means the feature is off.
@@ -100,15 +156,22 @@ pub async fn load_edit(
         // Not configured is not an error for a load - there is simply nothing.
         Err(_) => return Ok(Json(None)),
     };
-    let file = dir.join(edit_filename(&src));
+    // Newest first, and every file this title has ever been saved under - the
+    // current key, and the old path-keyed ones, whatever path they came from.
+    let mut edit: Option<SavedEdit> = None;
+    for file in candidates(&dir, &src).await {
+        let Ok(text) = tokio::fs::read_to_string(&file).await else { continue };
+        match serde_json::from_str::<SavedEdit>(&text) {
+            Ok(e) => { edit = Some(e); break }
+            Err(_) => tracing::warn!("saved edit {} is unreadable", file.display()),
+        }
+    }
+    let Some(mut edit) = edit else { return Ok(Json(None)) };
 
-    let Ok(text) = tokio::fs::read_to_string(&file).await else {
-        return Ok(Json(None));
-    };
-    let Ok(mut edit) = serde_json::from_str::<SavedEdit>(&text) else {
-        tracing::warn!("saved edit {} is unreadable", file.display());
-        return Ok(Json(None));
-    };
+    // Saved against this very file, or against another copy of it?
+    let same_path = edit.source == src.to_string_lossy();
+    edit.matched_by = if same_path { "path".into() } else { "title".into() };
+    edit.saved_for = if same_path { String::new() } else { edit.source.clone() };
 
     if let Ok(md) = tokio::fs::metadata(&src).await {
         let mtime = md
@@ -117,7 +180,21 @@ pub async fn load_edit(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        edit.stale = edit.source_size != 0 && (edit.source_size != md.len() || edit.source_mtime != mtime);
+        // Size and mtime only mean anything about the file they were recorded
+        // from. For another copy they are guaranteed to differ, so testing them
+        // would flag every title match as stale and teach you to ignore the
+        // warning. Duration is what decides whether the cuts still line up, and
+        // the client checks that against the clip it actually opened.
+        edit.stale = same_path
+            && edit.source_size != 0
+            && (edit.source_size != md.len() || edit.source_mtime != mtime);
+    }
+
+    if !same_path {
+        tracing::info!(
+            "cuts for {} loaded by title, saved against {}",
+            src.display(), edit.source
+        );
     }
     Ok(Json(Some(edit)))
 }
@@ -146,6 +223,9 @@ pub async fn save_edit(
     edit.saved_at = now();
     edit.stale = false;
 
+    edit.matched_by = String::new();
+    edit.saved_for = String::new();
+
     let file = dir.join(edit_filename(&src));
     let json = serde_json::to_string_pretty(&edit).map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -158,6 +238,14 @@ pub async fn save_edit(
     tokio::fs::rename(&tmp, &file)
         .await
         .map_err(|e| ApiError::Bad(format!("cannot save: {e}")))?;
+
+    // Migrate rather than leave a twin: the path-keyed file this clip used to
+    // save under would otherwise sit beside the new one forever, and whichever
+    // was written last would win the next load.
+    let legacy = dir.join(legacy_filename(&src));
+    if legacy != file && tokio::fs::remove_file(&legacy).await.is_ok() {
+        tracing::info!("migrated {} to title-keyed cuts", legacy.display());
+    }
 
     Ok(Json(serde_json::json!({
         "ok": true,
@@ -172,9 +260,15 @@ pub async fn delete_edit(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let src = to_real_path(&st, "", &q.path).await?;
     let dir = edits_dir(&st).await?;
-    let file = dir.join(edit_filename(&src));
-    let existed = tokio::fs::remove_file(&file).await.is_ok();
-    Ok(Json(serde_json::json!({ "ok": true, "removed": existed })))
+    // Everything saved under this title, or "delete" leaves an older
+    // path-keyed copy behind that reappears on the next load.
+    let mut removed = 0usize;
+    for f in candidates(&dir, &src).await {
+        if tokio::fs::remove_file(&f).await.is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "removed": removed > 0, "files": removed })))
 }
 
 #[derive(Serialize)]
