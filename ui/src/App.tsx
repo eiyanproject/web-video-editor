@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Icon, { type IconName } from './Icon'
+import { track, installTelemetryFlush } from './lib/telemetry'
 import Settings from './Settings'
 import Logs from './Logs'
 import Scrubber, { type SpriteIndex } from './Scrubber'
@@ -81,6 +83,25 @@ function describeMediaError(v: HTMLVideoElement): string {
   }
 }
 
+/** Turns a literal English title into a stable id. Titles are constants in
+ *  this file, so this can never carry a file name or anything the user typed. */
+/** A stable, filterable id for a key. The server only stores plain
+ *  identifiers, so '?' and '[' have to arrive as words or they are dropped -
+ *  and those are among the keys most worth measuring. */
+const KEY_ID: Record<string, string> = {
+  ' ': 'space', '?': 'question', '/': 'slash', '[': 'bracket_left',
+  ']': 'bracket_right', ',': 'comma', '.': 'period', '-': 'minus', '=': 'equals',
+  ';': 'semicolon', "'": 'quote', '\\': 'backslash', '`': 'backtick',
+}
+const keyId = (k: string) =>
+  KEY_ID[k] ?? (k.length === 1
+    ? (/^[a-z0-9]$/i.test(k) ? k.toLowerCase() : 'other')
+    : k.replace(/[^a-z0-9_.:+-]/gi, '') || 'other')
+
+const slug = (t: string) =>
+  t.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '').slice(0, 40) || 'button'
+
 const Btn = ({
   children, title, onClick, disabled, tone = 'plain', active,
 }: {
@@ -89,21 +110,80 @@ const Btn = ({
 }) => (
   <button
     title={title}
-    onClick={onClick}
+    onClick={() => { track('click', slug(title)); onClick() }}
     disabled={disabled}
     // Apple's control hierarchy: exactly one filled button per context, and
-    // everything else quiet until you point at it. A row of equally-filled
-    // grey chips - the old treatment - gives every action the same weight and
-    // is most of what made this look like a 2015 desktop app.
-    className={`shrink-0 rounded px-2.5 py-1.5 text-[13px] font-medium leading-none transition disabled:opacity-30 ${
+    // everything else BORDERLESS until you point at it.
+    //
+    // The filled grey chip was the boxy part. A toolbar of them draws a dozen
+    // rectangles competing with the content, gives every action identical
+    // weight, and is what a web app looks like; a native toolbar is mostly
+    // empty space with a tint that appears under the pointer.
+    className={`inline-flex shrink-0 items-center gap-1.5 rounded px-2.5 py-1.5 text-[13px] font-medium leading-none transition disabled:opacity-30 ${
       tone === 'accent' ? 'bg-indigo-500 text-white hover:bg-indigo-400'
-        : active ? 'bg-indigo-500/25 text-indigo-200 hover:bg-indigo-500/35'
-        : 'bg-white/[0.06] text-white/75 hover:bg-white/[0.12] hover:text-white'
+        : active ? 'bg-indigo-500/20 text-indigo-200 hover:bg-indigo-500/30'
+        : 'text-white/70 hover:bg-white/[0.09] hover:text-white'
     }`}
   >
     {children}
   </button>
 )
+
+/** An item in an overflow menu: icon, label, and the shortcut if it has one. */
+type MenuItem = {
+  icon: IconName
+  label: string
+  hint?: string
+  onClick: () => void
+  disabled?: boolean
+}
+
+/**
+ * The overflow menu.
+ *
+ * Everything occasional lives in one of these rather than on the toolbar. The
+ * rule for what stays outside: an action is a button only if it is used most
+ * times the pane is used. Everything else is here, WITH its shortcut written
+ * next to it - so the menu doubles as the place you learn the key and then
+ * stop needing the menu.
+ */
+const Menu = ({ items, label = 'More' }: { items: MenuItem[]; label?: string }) => {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [open])
+
+  return (
+    <div className="relative" ref={ref}>
+      <Btn title={label} active={open} onClick={() => { if (!open) track('menu', slug(label)); setOpen((v) => !v) }}>
+        <Icon name="more" />
+      </Btn>
+      {open && (
+        <div role="menu"
+          className="absolute right-0 z-40 mt-1.5 w-64 overflow-hidden rounded-xl border border-white/10 bg-[#1c1c1e] py-1.5 shadow-2xl shadow-black/50">
+          {items.map((it) => (
+            <button key={it.label} role="menuitem" disabled={it.disabled}
+              onClick={() => { setOpen(false); track('click', slug(it.label)); it.onClick() }}
+              className="flex w-full items-center gap-3 px-3 py-1.5 text-left text-[13px] text-white/80 transition hover:bg-white/[0.09] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent">
+              <Icon name={it.icon} className="text-white/55" />
+              <span className="min-w-0 flex-1 truncate">{it.label}</span>
+              {it.hint && <kbd className="shrink-0 text-[11px] text-white/30">{it.hint}</kbd>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** The character each physical key position carries on a US QWERTY board.
  *
@@ -224,23 +304,11 @@ export default function App() {
   }, [!!runningJob])
   const jobBusy = !!runningJob
 
-  // The overflow menu. Closes on an outside click or Escape, because a menu
-  // that only closes by re-pressing its own button is a menu people leave open.
-  const [showMore, setShowMore] = useState(false)
-  const moreRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!showMore) return
-    const away = (ev: MouseEvent) => {
-      if (!moreRef.current?.contains(ev.target as Node)) setShowMore(false)
-    }
-    const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setShowMore(false) }
-    document.addEventListener('mousedown', away)
-    document.addEventListener('keydown', esc)
-    return () => {
-      document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', esc)
-    }
-  }, [showMore])
+  /** Which shortcut the last keypress matched, so it can be reported once. */
+  const fired = useRef<string | null>(null)
+  const typingRef = useRef(false)
+  /** Set when the handler bailed out for want of a loaded clip. */
+  const gated = useRef(false)
 
   const [showPhoneHint, setShowPhoneHint] = useState(false)
   useEffect(() => {
@@ -404,6 +472,9 @@ export default function App() {
   const dragBase = useRef<typeof segs | null>(null)
 
   const seek = (t: number) => {
+    // currentTime throws on NaN or Infinity rather than ignoring them, taking
+    // the calling handler down with it. One check here covers every caller.
+    if (!isFinite(t)) return
     const v = editVideoRef.current
     const clamped = Math.max(0, Math.min(editDuration || v?.duration || 0, t))
     if (v) v.currentTime = clamped
@@ -737,6 +808,7 @@ export default function App() {
   // native handler has already run and won.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      fired.current = null
       // An input method that is mid-composition reports a placeholder key
       // ('Process', keyCode 229) rather than the key that was pressed. Acting
       // on that fires an arbitrary shortcut. Never true without an IME, so a
@@ -745,6 +817,7 @@ export default function App() {
 
       const el = e.target as HTMLElement | null
       const typing = !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)
+      typingRef.current = typing
 
       // e.key is what the LAYOUT produced; e.code is WHERE THE KEY SITS. They
       // agree on US QWERTY and diverge on a JIS board, where the punctuation
@@ -771,7 +844,11 @@ export default function App() {
       // the fallback was added for: a kana IME produces a character that is no
       // shortcut, and so does a JIS key pressed under a US layout.
       const typed = k.length === 1 && /^[a-z0-9/[\],.?]$/.test(k)
-      const is = (c: string) => k === c || (!typed && phys === c)
+      const is = (c: string) => {
+        const hit = k === c || (!typed && phys === c)
+        if (hit) fired.current = c
+        return hit
+      }
 
       // Only keys the browser would otherwise act on get cancelled. A plain
       // letter has no default worth taking, so those are left alone and every
@@ -781,6 +858,7 @@ export default function App() {
       // Tab moves between the two panes. Taken even when a file row has focus,
       // but never inside a text field, so forms still tab normally.
       if (e.key === 'Tab' && !typing) {
+        fired.current = 'Tab'
         const next = lastPlayerRef.current === 'editor' ? 'preview' : 'editor'
         const target = next === 'editor' ? editVideoRef.current : videoRef.current
         // Only claim Tab when there is a pane to land in. With no clip picked
@@ -794,6 +872,12 @@ export default function App() {
         return
       }
       if (typing) return
+      // The list handles its own Up/Down; without this they would be counted
+      // as keys that did nothing, when they are in fact the main way people
+      // move around the library.
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && listRef.current?.contains(el)) {
+        fired.current = e.key
+      }
 
       // Finding a file, the help sheet and the export mode touch no player, so
       // they must not wait for one to exist. F, / and P are precisely the keys
@@ -812,15 +896,15 @@ export default function App() {
         // clip loaded, so without this the way in has a key and the way out
         // does not.
         if (e.key === 'Backspace' && listRef.current?.contains(el)) {
-          take(); goUpRef.current?.(); return
+          fired.current = 'Backspace'; take(); goUpRef.current?.(); return
         }
 
         // F1 as well as '?', because '?' is Shift+Slash and a mismatched
         // physical layout can put it somewhere the user cannot find. The one
         // key that explains the others must not be the hardest to press.
         if (is('?')) { setShowHelp((h) => !h); return }
-        if (e.key === 'F1') { take(); setShowHelp((h) => !h); return }
-        if (e.key === 'Escape') { setShowHelp(false); return }
+        if (e.key === 'F1') { fired.current = 'F1'; take(); setShowHelp((h) => !h); return }
+        if (e.key === 'Escape') { fired.current = 'Escape'; setShowHelp(false); return }
 
         if (is('1')) { setExportMode('merge'); say('Export: single file'); return }
         if (is('2')) { setExportMode('separate'); say('Export: separate files'); return }
@@ -830,7 +914,14 @@ export default function App() {
       const wantEditor = lastPlayerRef.current !== 'preview'
       const v = (wantEditor ? editVideoRef.current : videoRef.current)
         ?? editVideoRef.current ?? videoRef.current
-      if (!v) return
+      if (!v) {
+        // Bound, but there is nothing to act on. Worth telling apart from a key
+        // that is bound to nothing at all: one says "this shortcut is missing",
+        // the other says "I reached for it before opening a clip", and only the
+        // first is a reason to add a binding.
+        gated.current = true
+        return
+      }
       const isEditor = v === editVideoRef.current
 
       // Frame stepping. The step is 1/fps of the loaded clip, so fractional
@@ -851,20 +942,21 @@ export default function App() {
 
       if (e.ctrlKey || e.metaKey) {
         // Ctrl + arrows: one second, for placing a cut without hunting.
-        if (e.key === 'ArrowRight') { take(); return jump(1) }
-        if (e.key === 'ArrowLeft') { take(); return jump(-1) }
+        if (e.key === 'ArrowRight') { fired.current = 'ArrowRight'; take(); return jump(1) }
+        if (e.key === 'ArrowLeft') { fired.current = 'ArrowLeft'; take(); return jump(-1) }
         if (is('z')) { take(); e.shiftKey ? redoRef.current?.() : undoRef.current?.(); return }
         if (is('s')) { take(); saveEditRef.current?.(); return }   // browser save
-        if (e.key === 'Enter') { exportRef.current?.(); return }
+        if (e.key === 'Enter') { fired.current = 'Enter'; exportRef.current?.(); return }
         return
       }
       if (e.altKey) return   // leave browser navigation alone
 
-      if (e.key === 'ArrowRight') { take(); return jump(5) }
-      if (e.key === 'ArrowLeft') { take(); return jump(-5) }
+      if (e.key === 'ArrowRight') { fired.current = 'ArrowRight'; take(); return jump(5) }
+      if (e.key === 'ArrowLeft') { fired.current = 'ArrowLeft'; take(); return jump(-5) }
       if (is('.')) return jump(frame)
       if (is(',')) return jump(-frame)
       if (e.key === ' ') {
+        fired.current = ' '
         take()   // stops the page scrolling
         v.paused ? v.play().catch(() => {}) : v.pause(); return
       }
@@ -878,13 +970,38 @@ export default function App() {
       // X for cut, as in cut-and-paste everywhere else. S still works, since
       // that is what video editors tend to use for split.
       if (is('x') || is('s')) { splitRef.current?.(); return }
-      if (e.key === 'Delete') { toggleRef.current?.(); return }
-      if (e.key === 'Backspace') { take(); toggleRef.current?.(); return }  // used to go back
+      if (e.key === 'Delete') { fired.current = 'Delete'; toggleRef.current?.(); return }
+      if (e.key === 'Backspace') { fired.current = 'Backspace'; take(); toggleRef.current?.(); return }  // used to go back
       if (is('[')) { stepSegmentRef.current?.(-1); return }
       if (is(']')) { stepSegmentRef.current?.(1); return }
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    // Reporting happens HERE, not inside the handler, because the handler has
+    // a dozen early returns - including "is there a video yet" - and a miss
+    // recorded only on the paths that reach the bottom would miss exactly the
+    // case worth knowing about: keys pressed while browsing with nothing open.
+    /** Keys that only mean something once a clip is open. */
+    const NEEDS_CLIP = new Set([
+      'ArrowLeft', 'ArrowRight', ' ', ',', '.', 't', 'g', 'k', 'x', 's',
+      '[', ']', 'Delete', 'Backspace',
+    ])
+
+    const wrapped = (e: KeyboardEvent) => {
+      gated.current = false
+      onKey(e)
+      if (fired.current) { track('shortcut', keyId(fired.current)); return }
+      if (typingRef.current) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Dead'].includes(e.key)) return
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      if (gated.current && NEEDS_CLIP.has(k)) {
+        track('shortcut_blocked', keyId(e.key), 'no_clip')
+        return
+      }
+      track('shortcut_miss', keyId(e.key))
+    }
+    window.addEventListener('keydown', wrapped, true)
+    installTelemetryFlush()
+    return () => window.removeEventListener('keydown', wrapped, true)
   }, [])
 
   // The mouse back button navigates UP A FOLDER rather than leaving the app.
@@ -1367,31 +1484,15 @@ export default function App() {
                 are occasional, and as loose buttons they overflowed this row
                 the moment the window got narrow, which is exactly when the
                 phone link is the thing you need. */}
-            <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}>⚙ Settings</Btn>
-            <div className="relative" ref={moreRef}>
-              <Btn title="More" active={showMore} onClick={() => setShowMore((v) => !v)}>⋯</Btn>
-              {showMore && (
-                <div role="menu"
-                  className="absolute right-0 z-40 mt-1 w-60 overflow-hidden rounded-lg border border-white/15 bg-[#1c1c1e] py-1 shadow-xl shadow-black/40">
-                  {([
-                    ['📱', 'Phone editor', `Open the touch UI on port ${PHONE_PORT}`,
-                      () => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener')],
-                    ['⌨', 'Keyboard shortcuts', 'Also ? or F1', () => setShowHelp(true)],
-                    ['📋', 'Application log', 'Mounts, saves and errors', () => setPage('logs')],
-                  ] as const).map(([icon, label, hint, act]) => (
-                    <button key={label} role="menuitem"
-                      onClick={() => { setShowMore(false); act() }}
-                      className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-white/10">
-                      <span className="w-5 shrink-0 text-center text-white/60">{icon}</span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-xs text-white/85">{label}</span>
-                        <span className="block truncate text-[10px] text-white/35">{hint}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <Btn title="Open settings, network shares and library folders" onClick={() => setPage('settings')}><Icon name="gear" /> Settings</Btn>
+            {/* The same Menu every other pane uses, rather than a second
+                hand-rolled dropdown that would drift from it. */}
+            <Menu label="More" items={[
+              { icon: 'phone', label: 'Phone editor', hint: `:${PHONE_PORT}`,
+                onClick: () => window.open(`${location.protocol}//${location.hostname}:${PHONE_PORT}/`, '_blank', 'noopener') },
+              { icon: 'keyboard', label: 'Keyboard shortcuts', hint: '?', onClick: () => setShowHelp(true) },
+              { icon: 'list', label: 'Application log', onClick: () => setPage('logs') },
+            ]} />
           </div>
 
           <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-2">
@@ -1399,14 +1500,14 @@ export default function App() {
               tone="accent"
               disabled={!selected || jobBusy}
               onClick={() => { setLoaded(selected); say(`Loaded ${selected!.name}`) }}>
-              ⇤ Load into editor
+              <Icon name="toEditor" /> Load into editor
             </Btn>
             <Btn title="Clear the editor (U)" disabled={!loaded} onClick={clearEditor}>
-              ✕ Clear
+              <Icon name="close" /> Clear
             </Btn>
             <div className="flex-1" />
             <Btn title="Copy the loaded file's full path" disabled={!loaded} onClick={() => copy(loaded!.abs, 'Path')}>
-              ⧉ Copy path
+              <Icon name="copy" /> Copy path
             </Btn>
           </div>
 
@@ -1493,15 +1594,30 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 px-3 py-2 text-xs">
-                  <Btn title="Cut at the playhead (S)" tone="accent" disabled={jobBusy} onClick={splitHere}>✂ Cut here</Btn>
-                  <Btn title="Exclude or restore the selected segment (Del)" onClick={toggleSelected}>🗑 Keep / drop</Btn>
-                  <div className="mx-1 h-4 w-px bg-white/15" />
-                  <Btn title="Undo (Ctrl+Z)" disabled={!canUndo || jobBusy} onClick={undo}>↶</Btn>
-                  <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || jobBusy} onClick={redo}>↷</Btn>
-                  <Btn title="Remove every cut and start again" onClick={reset}>Reset</Btn>
-                  <div className="mx-1 h-4 w-px bg-white/15" />
-                  <Btn title="Save this cut list to the share so it comes back next time"
-                    tone="accent" onClick={() => saveEdit(false)}>💾 Save cuts</Btn>
+                  {/* One filled button. Cutting is the verb this pane exists
+                      for; undo and redo stay because a cut is the thing you
+                      most often want back. The rest has a key and lives in the
+                      menu, which is where the key is written down. */}
+                  <Btn title="Cut at the playhead (S)" tone="accent" disabled={jobBusy} onClick={splitHere}>
+                    <Icon name="scissors" /> Cut here
+                  </Btn>
+                  <Btn title="Undo (Ctrl+Z)" disabled={!canUndo || jobBusy} onClick={undo}>
+                    <Icon name="undo" />
+                  </Btn>
+                  <Btn title="Redo (Ctrl+Shift+Z)" disabled={!canRedo || jobBusy} onClick={redo}>
+                    <Icon name="redo" />
+                  </Btn>
+                  <Menu label="Edit actions" items={[
+                    { icon: 'merge', label: 'Keep / drop segment', hint: 'Del', onClick: toggleSelected },
+                    { icon: 'target', label: 'Snap to nearest keyframe', hint: 'K',
+                      onClick: () => snapKeyframeRef.current?.() },
+                    { icon: 'save', label: 'Save cut list', hint: 'Ctrl+S', onClick: () => saveEdit(false) },
+                    { icon: 'arrowLeft', label: 'Back one frame', hint: ',', onClick: () => seek(editTime - 1 / fps) },
+                    { icon: 'arrowRight', label: 'Forward one frame', hint: '.', onClick: () => seek(editTime + 1 / fps) },
+                    { icon: 'arrowLeft', label: 'Back 5 seconds', hint: '←', onClick: () => seek(editTime - 5) },
+                    { icon: 'arrowRight', label: 'Forward 5 seconds', hint: '→', onClick: () => seek(editTime + 5) },
+                    { icon: 'trash', label: 'Remove every cut', onClick: reset },
+                  ]} />
                   {editSaved && <span className="text-[10px] text-white/25">saved {editSaved}</span>}
                   <div className="flex-1" />
                   <span className="font-mono text-[11px] text-emerald-300">{fmtTimecode(editTime)}</span>
@@ -1659,7 +1775,7 @@ export default function App() {
                 className="flex-1 rounded bg-white/10 px-2 py-1 text-sm outline-none placeholder:text-white/25"
               />
               <Btn title="Open the pasted path" tone="accent" onClick={goToPasted}>Go</Btn>
-              <Btn title="Close (Esc)" onClick={() => { setShowPaste(false); setPasted('') }}>✕</Btn>
+              <Btn title="Close (Esc)" onClick={() => { setShowPaste(false); setPasted('') }}><Icon name="close" /></Btn>
             </div>
           )}
 
@@ -1730,35 +1846,28 @@ export default function App() {
             </span>
             {duration > 0 && <span className="font-mono text-xs text-white/25">/ {fmtTimecode(duration)}</span>}
             {analyzing && <span className="text-xs text-amber-300/70">analysing…</span>}
-            <Btn title="Copy the current playback time as HH:MM:SS.mmm" disabled={!selected}
-              onClick={() => copy(fmtTimecode(videoRef.current?.currentTime ?? 0), 'Timecode')}>
-              ⏱ Copy time
-            </Btn>
-            <Btn title="Copy the current time in seconds, e.g. 743.520" disabled={!selected}
-              onClick={() => copy((videoRef.current?.currentTime ?? 0).toFixed(3), 'Seconds')}>
-              Copy seconds
-            </Btn>
-            <Btn title={muted ? 'Unmute' : 'Mute'} disabled={!selected} onClick={() => setMuted(!muted)}>
-              {muted ? '🔇' : '🔊'}
-            </Btn>
-            <Btn title="Fullscreen" disabled={!selected} onClick={() => videoRef.current?.requestFullscreen()}>⛶</Btn>
-            <Btn title="Close this video and free the player (U)" disabled={!selected}
-              onClick={closePreview}>
-              ⏏ Unload
-            </Btn>
-            <Btn
-              title="Generate hover thumbnails for this file. Reads the entire file once, so it is slow over a network share — do it for files you are actually editing."
-              disabled={!selected} onClick={rebuildThumbs}>
-              {sprites?.done ? '⟳ Thumbs' : '🖼 Thumbs'}
-            </Btn>
-            <Btn
-              title="Draw the audio envelope on the scrub bar automatically. Each clip is read once (seconds to a minute), cached at about 20 kB, and the cache expires after an hour. Off means nothing is ever read for this."
-              active={waveAuto}
-              disabled={waveBusy} onClick={toggleWaveAuto}>
-              {waveBusy ? '〜 …' : waveAuto ? '〜 Wave on' : '〜 Wave off'}
-            </Btn>
             <div className="flex-1" />
-            <Btn title="Copy the selected file's path" disabled={!selected} onClick={() => copy(selected!.abs, 'Path')}>⧉ Path</Btn>
+            {/* Play, mute and fullscreen already exist on the <video> element's
+                own controls, three inches away. Everything else here is
+                occasional, so none of it earns permanent space. */}
+            <Menu label="Player actions" items={[
+              { icon: 'clock', label: 'Copy timecode', disabled: !selected,
+                onClick: () => copy(fmtTimecode(videoRef.current?.currentTime ?? 0), 'Timecode') },
+              { icon: 'clock', label: 'Copy time in seconds', disabled: !selected,
+                onClick: () => copy((videoRef.current?.currentTime ?? 0).toFixed(3), 'Seconds') },
+              { icon: 'copy', label: "Copy this file's path", disabled: !selected,
+                onClick: () => copy(selected!.abs, 'Path') },
+              { icon: muted ? 'mute' : 'volume', label: muted ? 'Unmute' : 'Mute',
+                disabled: !selected, onClick: () => setMuted(!muted) },
+              { icon: 'fullscreen', label: 'Fullscreen', disabled: !selected,
+                onClick: () => videoRef.current?.requestFullscreen() },
+              { icon: 'image', label: sprites?.done ? 'Rebuild thumbnails' : 'Build thumbnails',
+                disabled: !selected, onClick: rebuildThumbs },
+              { icon: 'wave', label: waveBusy ? 'Reading audio…' : waveAuto ? 'Waveform: on' : 'Waveform: off',
+                disabled: waveBusy, onClick: toggleWaveAuto },
+              { icon: 'eject', label: 'Close this video', hint: 'U',
+                disabled: !selected, onClick: closePreview },
+            ]} />
           </div>
 
           {probe && (
@@ -1793,12 +1902,17 @@ export default function App() {
           {/* Folder explorer toolbar: navigation and view controls together,
               directly above the listing they act on. */}
           <div className="flex flex-wrap items-center gap-1 border-y border-white/10 bg-white/[0.02] px-2 py-1.5 text-xs">
-            <Btn title="Show library folders" onClick={() => openDir('')}>⌂</Btn>
-            <Btn title="Go to the parent folder (or your mouse back button)"
-              disabled={!parent} onClick={() => openDir(parent!)}>↑</Btn>
-            <Btn title="Re-read this folder from disk" onClick={() => { openDir(cwd); say('Refreshed') }}>⟳</Btn>
-            <Btn title="Add this folder to your library permanently" disabled={!cwd} onClick={addCwdToLibrary}>★</Btn>
-            <Btn title="Copy this folder's path" disabled={!cwd} onClick={() => copy(cwd, 'Folder path')}>⧉</Btn>
+            <Btn title="Go to the parent folder (Backspace, or your mouse back button)"
+              disabled={!parent} onClick={() => openDir(parent!)}>
+              <Icon name="up" />
+            </Btn>
+            <Menu label="Folder actions" items={[
+              { icon: 'home', label: 'Library folders', onClick: () => openDir('') },
+              { icon: 'refresh', label: 'Re-read this folder', onClick: () => { openDir(cwd); say('Refreshed') } },
+              { icon: 'star', label: 'Add to library', disabled: !cwd, onClick: addCwdToLibrary },
+              { icon: 'copy', label: "Copy this folder's path", disabled: !cwd,
+                onClick: () => copy(cwd, 'Folder path') },
+            ]} />
 
             {!atHome && (
               <>
@@ -1806,7 +1920,7 @@ export default function App() {
                 <input ref={filterRef} value={filter} onChange={(e) => setFilter(e.target.value)}
                   placeholder="Filter…"
                   className="w-32 rounded bg-white/10 px-2 py-1 outline-none placeholder:text-white/25" />
-                {filter && <Btn title="Clear the filter" onClick={() => setFilter('')}>✕</Btn>}
+                {filter && <Btn title="Clear the filter" onClick={() => setFilter('')}><Icon name="close" /></Btn>}
                 {(['name', 'mtime', 'size'] as SortKey[]).map((k) => (
                   <Btn key={k} title={`Sort by ${k === 'mtime' ? 'date' : k}`} active={sortKey === k}
                     onClick={() => (sortKey === k ? setSortAsc(!sortAsc) : (setSortKey(k), setSortAsc(k === 'name')))}>
@@ -1890,7 +2004,7 @@ export default function App() {
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 >
                   <span className="w-4 shrink-0 text-white/40">
-                    {e.is_dir ? '📁' : e.problem ? '⚠️' : e.is_video ? '🎬' : '📄'}
+                    {e.is_dir ? <Icon name="folder" /> : e.problem ? <Icon name="warning" className="text-amber-300" /> : e.is_video ? <Icon name="film" /> : <Icon name="file" />}
                   </span>
                   <span className={`flex-1 truncate ${e.problem ? 'text-amber-300' : e.is_video || e.is_dir ? '' : 'text-white/40'}`}>
                     {e.name}
@@ -1903,9 +2017,9 @@ export default function App() {
                     user tabbed into controls they could not see. */}
                 <div className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                   {!e.is_dir && e.is_video && (
-                    <Btn title="Load straight into the editor" onClick={() => { setSelected(e); setLoaded(e); say(`Loaded ${e.name}`) }}>⇤</Btn>
+                    <Btn title="Load straight into the editor" onClick={() => { setSelected(e); setLoaded(e); say(`Loaded ${e.name}`) }}><Icon name="toEditor" /></Btn>
                   )}
-                  <Btn title="Copy this path" onClick={() => copy(e.abs, 'Path')}>⧉</Btn>
+                  <Btn title="Copy this path" onClick={() => copy(e.abs, 'Path')}><Icon name="copy" /></Btn>
                 </div>
               </div>
             ))}

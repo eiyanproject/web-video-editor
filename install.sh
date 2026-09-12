@@ -11,6 +11,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/eiyanproject/web-video-editor/main/install.sh | bash
 #   ./install.sh --port 8088                 # somewhere else
 #   ./install.sh --phone-port 8081           # the phone UI's own port
+#   ./install.sh --prune                     # also prune the shared build cache
 #   ./install.sh --auth me:secret            # basic auth, for anything reachable
 #   ./install.sh --self-signed               # TLS on 443 with a throwaway cert
 #   ./install.sh --uninstall
@@ -30,6 +31,7 @@ AUTH=""
 SELF_SIGNED=""
 DO_PULL=1
 UNINSTALL=0
+PRUNE=0
 
 c_g=$'\033[32m'; c_y=$'\033[33m'; c_r=$'\033[31m'; c_b=$'\033[1m'; c_0=$'\033[0m'
 say()  { printf '%s==>%s %s\n' "$c_b" "$c_0" "$1"; }
@@ -47,6 +49,7 @@ while [ $# -gt 0 ]; do
     --no-auth)   AUTH="none"; shift ;;
     --self-signed) SELF_SIGNED=1; shift ;;
     --no-pull)   DO_PULL=0; shift ;;
+    --prune)     PRUNE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -221,7 +224,42 @@ for c in wve-api wve-ui; do
 done
 
 say "Starting"
-$DC up -d
+# --remove-orphans: a service removed from the compose file leaves its container
+# running forever otherwise. That is exactly the stale part nobody notices -
+# it keeps its port and its memory, and the next release quietly fights it.
+$DC up -d --remove-orphans
+
+# ---------------------------------------------------------------- tidy up
+# A rebuild leaves the PREVIOUS image untagged and taking the same disk as the
+# new one. Nothing ever reclaims it, so a box that has been updated a dozen
+# times is carrying a dozen dead images - on a small LXC that is the whole
+# reason it runs out of room.
+say "Cleaning up"
+
+# Scoped to images this project orphaned, never a blanket prune: other things
+# on this host have their own dangling images and they are not ours to delete.
+STALE="$(docker images -f dangling=true -f label=org.opencontainers.image.title=web-video-editor -q 2>/dev/null || true)"
+# No untagged-image fallback on purpose. Matching every dangling image on the
+# host would reclaim more space and would also delete images belonging to
+# whatever else runs on this machine. Images built before this label existed
+# are left alone; from the next update on, they carry it.
+if [ -n "${STALE:-}" ]; then
+  BEFORE_DISK="$(docker system df --format '{{.Size}}' 2>/dev/null | head -1 || echo '?')"
+  # shellcheck disable=SC2086
+  docker rmi $STALE >/dev/null 2>&1 || true
+  ok "removed $(printf '%s
+' "$STALE" | wc -l | tr -d ' ') stale image layer(s)"
+else
+  ok "no stale images to remove"
+fi
+
+if [ "$PRUNE" -eq 1 ]; then
+  # Opt-in, because it is HOST-WIDE and will slow the next build of everything
+  # on this machine, not just this project.
+  warn "pruning the shared build cache (host-wide, next build will be slower)"
+  docker builder prune -f >/dev/null 2>&1 || true
+  ok "build cache pruned"
+fi
 
 # ---------------------------------------------------------------- verify
 say "Verifying"

@@ -14,12 +14,11 @@ import { fmtTimecode } from '../lib/shared'
  * ever arrives, and the bar looks broken rather than slow.
  */
 export default function ScrubPad({
-  current, duration, onSeek, keyframes = [], onScrubStart, onScrubEnd,
+  current, duration, onSeek, onScrubStart, onScrubEnd,
 }: {
   current: number
   duration: number
   onSeek: (t: number) => void
-  keyframes?: number[]
   onScrubStart?: () => void
   onScrubEnd?: () => void
 }) {
@@ -28,8 +27,13 @@ export default function ScrubPad({
 
   const timeAt = (clientX: number) => {
     const el = trackRef.current
-    if (!el || !duration) return 0
+    // A zero-width bar makes the ratio 0/0 = NaN, which propagates through the
+    // multiply and throws when it reaches currentTime. It happens whenever the
+    // bar is laid out at zero width - a collapsed pane, a hidden tab, the
+    // frame before the first measure - so guard the divisor, not the caller.
+    if (!el || !duration || !isFinite(duration)) return 0
     const r = el.getBoundingClientRect()
+    if (r.width <= 0) return 0
     return Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * duration
   }
 
@@ -57,14 +61,6 @@ export default function ScrubPad({
 
   const pct = duration ? (current / duration) * 100 : 0
 
-  // A two-hour film carries thousands of keyframes; drawn all at once they are
-  // a solid block and a DOM node each. Sample to roughly one per 4px.
-  const ticks = (() => {
-    if (!duration || !keyframes.length) return []
-    const step = Math.max(1, Math.ceil(keyframes.length / 90))
-    return keyframes.filter((_, i) => i % step === 0)
-  })()
-
   return (
     <div className="px-3 py-2">
       <div
@@ -75,10 +71,6 @@ export default function ScrubPad({
         onPointerCancel={up}
         className="relative h-11 touch-none select-none overflow-hidden rounded-lg bg-white/10"
       >
-        {ticks.map((t, i) => (
-          <div key={i} className="pointer-events-none absolute inset-y-0 w-px bg-white/20"
-            style={{ left: `${(t / duration) * 100}%` }} />
-        ))}
 
         {/* played portion */}
         <div className="pointer-events-none absolute inset-y-0 left-0 bg-indigo-500/25"

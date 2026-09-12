@@ -6,6 +6,7 @@ COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim
+LABEL org.opencontainers.image.title="web-video-editor"
 # cifs-utils -> mount.cifs for SMB shares configured in the UI
 # ffmpeg     -> probing and export, from Phase 1 onward
 RUN apt-get update \

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import FolderPicker from './FolderPicker'
+import { enabled as telemetryOn, setEnabled as setTelemetryOn } from './lib/telemetry'
 
 type RootCfg = { name: string; path: string; writable: boolean }
 type SmbPublic = {
@@ -84,6 +85,15 @@ export default function Settings({
   const [logs, setLogs] = useState<LogRow[]>([])
   const [logLevel, setLogLevel] = useState('')
   const [logFind, setLogFind] = useState('')
+  type Summary = Record<string, { id: string; count: number }[]>
+  const [telem, setTelem] = useState<{ total: number; summary: Summary } | null>(null)
+  const [telemEnabled, setTelemEnabled] = useState(telemetryOn())
+  const loadTelem = async () => {
+    try {
+      const d = await (await fetch('/api/telemetry')).json()
+      setTelem({ total: d.total ?? 0, summary: d.summary ?? {} })
+    } catch { /* leave the panel as it was */ }
+  }
   const loadLogs = async (level = logLevel, contains = logFind) => {
     try {
       const r = await fetch(`/api/logs?level=${encodeURIComponent(level)}&contains=${encodeURIComponent(contains)}`)
@@ -132,6 +142,7 @@ export default function Settings({
     setMaxJobs(d.max_parallel_jobs ?? 1)
     setMaxScans(d.max_parallel_analysis ?? 1)
     loadLogs()
+    loadTelem()
     fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
@@ -588,6 +599,62 @@ export default function Settings({
             opening the same clip on a laptop and a phone started two full reads of it
             over the share, on top of whatever was exporting.
           </p>
+        </div>
+
+        {/* ---- telemetry --------------------------------------------------- */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <label className="flex items-center gap-2 text-sm text-white/70">
+            <input type="checkbox" checked={telemEnabled}
+              onChange={(e) => { setTelemEnabled(e.target.checked); setTelemetryOn(e.target.checked) }} />
+            Record how the interface is used
+          </label>
+          <p className="mt-1 text-xs leading-relaxed text-white/40">
+            Counts of which shortcuts fire, which buttons are clicked, and —
+            the useful one — <span className="text-white/60">keys pressed that do nothing</span>,
+            which is the app being told what you expected it to do. Stored beside
+            settings.json and never sent anywhere. No file names, paths, timecodes or
+            typed text are recorded; the server drops anything that is not a plain
+            identifier, so that holds even if the browser sends something it should not.
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button onClick={loadTelem} className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20">Refresh</button>
+            <a href="/api/telemetry" download="veditor-telemetry.json"
+              className="rounded bg-indigo-500 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-400">
+              Download
+            </a>
+            <button
+              onClick={async () => { await fetch('/api/telemetry', { method: 'DELETE' }); loadTelem() }}
+              className="rounded bg-white/10 px-2 py-1 text-xs text-amber-200 hover:bg-white/20">
+              Clear
+            </button>
+            <div className="flex-1" />
+            <span className="text-[11px] text-white/35">{telem?.total ?? 0} events</span>
+          </div>
+
+          {telem && Object.keys(telem.summary).length > 0 && (
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              {(['shortcut_miss', 'shortcut', 'click', 'menu'] as const)
+                .filter((k) => telem.summary[k]?.length)
+                .map((k) => (
+                  <div key={k} className="rounded border border-white/10 bg-black/30 p-2">
+                    <div className={`mb-1 text-[11px] font-medium ${
+                      k === 'shortcut_miss' ? 'text-amber-300' : 'text-white/50'
+                    }`}>
+                      {k === 'shortcut_miss' ? 'keys that did nothing'
+                        : k === 'shortcut' ? 'shortcuts used'
+                        : k === 'click' ? 'buttons clicked' : 'menus opened'}
+                    </div>
+                    {telem.summary[k].slice(0, 8).map((r) => (
+                      <div key={r.id} className="flex justify-between gap-2 py-0.5 text-[11px]">
+                        <span className="min-w-0 truncate font-mono text-white/70">{r.id}</span>
+                        <span className="shrink-0 text-white/35">{r.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
 
         {/* ---- logs ------------------------------------------------------- */}

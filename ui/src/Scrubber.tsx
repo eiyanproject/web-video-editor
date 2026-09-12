@@ -78,8 +78,13 @@ export default function Scrubber({
 
   const timeAt = (clientX: number) => {
     const el = trackRef.current
-    if (!el || !duration) return 0
+    // A zero-width bar makes the ratio 0/0 = NaN, which propagates through the
+    // multiply and throws when it reaches currentTime. It happens whenever the
+    // bar is laid out at zero width - a collapsed pane, a hidden tab, the
+    // frame before the first measure - so guard the divisor, not the caller.
+    if (!el || !duration || !isFinite(duration)) return 0
     const r = el.getBoundingClientRect()
+    if (r.width <= 0) return 0
     const ratio = Math.min(1, Math.max(0, (clientX - r.left) / r.width))
     return ratio * duration
   }
@@ -107,15 +112,6 @@ export default function Scrubber({
   const tile = hoverT != null ? tileFor(hoverT) : null
   const pct = duration ? (current / duration) * 100 : 0
 
-  // A two-hour film can carry thousands of keyframes; drawing every one turns
-  // the bar into a solid block and costs a DOM node each. Sample to taste.
-  const ticks = (() => {
-    if (!duration || !keyframes.length || !width) return []
-    const maxTicks = Math.min(600, Math.floor(width / 3))
-    const step = Math.max(1, Math.ceil(keyframes.length / maxTicks))
-    return keyframes.filter((_, i) => i % step === 0)
-  })()
-
   const nearestKf = hoverT != null && keyframes.length
     ? keyframes.reduce((a, b) => (Math.abs(b - hoverT) < Math.abs(a - hoverT) ? b : a))
     : null
@@ -133,12 +129,6 @@ export default function Scrubber({
         {!!peaks?.length && (
           <canvas ref={waveRef} className="pointer-events-none absolute inset-0 h-full w-full" />
         )}
-        {/* keyframe ticks: where a lossless cut may land. Full height, because
-            without thumbnails this bar's job is showing cut geometry. */}
-        {ticks.map((t, i) => (
-          <div key={i} className="absolute inset-y-0 w-px bg-white/25"
-            style={{ left: `${(t / duration) * 100}%` }} />
-        ))}
 
         {/* minute markers for orientation */}
         {duration > 0 && Array.from({ length: Math.min(60, Math.floor(duration / 60)) }, (_, i) => (i + 1) * 60)
@@ -203,9 +193,6 @@ export default function Scrubber({
           </span>
         )}
         {indexing && <span className="text-amber-300/70">indexing keyframes…</span>}
-        {!keyframes.length && !indexing && !loadedForEditing && (
-          <span className="text-white/25">Load into editor for keyframe ticks</span>
-        )}
         {sprites && !sprites.done && !sprites.error && (
           <span className="text-amber-300/70">
             building thumbnails… {sprites.sheets}/{Math.ceil(sprites.count / 100) || '?'} sheets

@@ -1353,6 +1353,165 @@ async fn metrics(State(st): State<AppState>) -> Response {
         .into_response()
 }
 
+// ---------------------------------------------------------------- telemetry
+
+#[derive(Deserialize)]
+struct TelemetryBatch {
+    #[serde(default)]
+    surface: String,
+    #[serde(default)]
+    events: Vec<TelemetryEvent>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TelemetryEvent {
+    kind: String,
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(default)]
+    at: u64,
+}
+
+#[derive(Serialize)]
+struct StoredEvent {
+    kind: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    at: u64,
+    surface: String,
+}
+
+fn telemetry_path(st: &AppState) -> PathBuf {
+    st.config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("telemetry")
+        .join("events.jsonl")
+}
+
+/// Same bound as the log: rotate at a fixed size, keep one generation. An
+/// interface-events file should never be the reason a disk fills.
+const TELEMETRY_MAX: u64 = 2 * 1024 * 1024;
+
+/// Only these are ever stored. Anything else the client sends is dropped
+/// rather than trusted - the file is meant to be safe to hand to someone, and
+/// that guarantee has to hold on the WRITE side, not the read side.
+const ALLOWED_KINDS: &[&str] = &[
+    "shortcut", "shortcut_miss", "shortcut_blocked", "click", "menu", "export", "error",
+];
+
+/// Identifiers are `[a-z0-9_.:+-]`, capped. A file name or a typed path cannot
+/// survive this, so no amount of client bugs can put media names in the file.
+fn safe_id(v: &str) -> Option<String> {
+    let v = v.trim();
+    if v.is_empty() || v.len() > 48 {
+        return None;
+    }
+    if v.chars().all(|c| c.is_ascii_alphanumeric() || "_.:+-".contains(c)) {
+        Some(v.to_string())
+    } else {
+        None
+    }
+}
+
+async fn post_telemetry(
+    State(st): State<AppState>,
+    Json(b): Json<TelemetryBatch>,
+) -> Json<serde_json::Value> {
+    let surface = safe_id(&b.surface).unwrap_or_else(|| "unknown".into());
+    let path = telemetry_path(&st);
+    if let Some(dir) = path.parent() {
+        let _ = tokio::fs::create_dir_all(dir).await;
+    }
+    if tokio::fs::metadata(&path)
+        .await
+        .map(|m| m.len() > TELEMETRY_MAX)
+        .unwrap_or(false)
+    {
+        let _ = tokio::fs::rename(&path, path.with_extension("jsonl.1")).await;
+    }
+
+    let mut out = String::new();
+    let mut kept = 0usize;
+    for e in b.events.iter().take(500) {
+        if !ALLOWED_KINDS.contains(&e.kind.as_str()) {
+            continue;
+        }
+        let (Some(id), Some(kind)) = (safe_id(&e.id), safe_id(&e.kind)) else { continue };
+        let detail = e.detail.as_deref().and_then(safe_id);
+        let rec = StoredEvent { kind, id, detail, at: e.at, surface: surface.clone() };
+        if let Ok(line) = serde_json::to_string(&rec) {
+            out.push_str(&line);
+            out.push('\n');
+            kept += 1;
+        }
+    }
+    if !out.is_empty() {
+        use tokio::io::AsyncWriteExt;
+        if let Ok(mut f) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+        {
+            let _ = f.write_all(out.as_bytes()).await;
+        }
+    }
+    Json(serde_json::json!({ "ok": true, "stored": kept }))
+}
+
+/// Returns a ready-made summary plus the raw events, so the file can be read
+/// by a person or handed over whole.
+async fn get_telemetry(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let path = telemetry_path(&st);
+    let mut text = String::new();
+    for p in [path.with_extension("jsonl.1"), path.clone()] {
+        if let Ok(t) = tokio::fs::read_to_string(&p).await {
+            text.push_str(&t);
+        }
+    }
+
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut counts: std::collections::HashMap<(String, String), u64> =
+        std::collections::HashMap::new();
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            *counts.entry((kind, id)).or_insert(0) += 1;
+            events.push(v);
+        }
+    }
+
+    // Grouped by kind, commonest first - the shape you actually want to read.
+    let mut by_kind: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    let mut pairs: Vec<((String, String), u64)> = counts.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    for ((kind, id), n) in pairs {
+        by_kind
+            .entry(kind)
+            .or_default()
+            .push(serde_json::json!({ "id": id, "count": n }));
+    }
+
+    Json(serde_json::json!({
+        "total": events.len(),
+        "summary": by_kind,
+        "events": events,
+    }))
+}
+
+async fn clear_telemetry(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let path = telemetry_path(&st);
+    let _ = tokio::fs::remove_file(&path).await;
+    let _ = tokio::fs::remove_file(path.with_extension("jsonl.1")).await;
+    tracing::info!("telemetry cleared");
+    Json(serde_json::json!({ "ok": true }))
+}
+
 async fn get_logs(State(st): State<AppState>, Query(q): Query<LogQuery>) -> Json<serde_json::Value> {
     let want = q.level.trim().to_uppercase();
     let needle = q.contains.trim().to_lowercase();
@@ -1484,6 +1643,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/check-path", post(check_path))
         .route("/api/logs", get(get_logs))
+        .route("/api/telemetry", get(get_telemetry).post(post_telemetry).delete(clear_telemetry))
         .route("/api/logs/clear", post(clear_logs))
         // ---- Phase 1: media analysis ----
         .route("/api/probe", get(media::get_probe))

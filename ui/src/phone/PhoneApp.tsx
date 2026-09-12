@@ -6,6 +6,7 @@ import {
 // duplicate here would quietly go stale.
 import type { Probe } from '../MediaInfo'
 import { useSegments, splitAt, toggleKeep, mergeAt, snapToKeyframe, normalise, keptDuration } from '../segments'
+import Icon from '../Icon'
 import ScrubPad from './ScrubPad'
 import TimeWheel from './TimeWheel'
 
@@ -200,6 +201,9 @@ export default function PhoneApp() {
   const exportBusy = !!activeJob
 
   const seekEdit = (t: number) => {
+    // currentTime throws on NaN or Infinity rather than ignoring them, which
+    // takes the whole handler down with it. One check here covers every caller.
+    if (!isFinite(t)) return
     const clamped = Math.max(0, Math.min(editDuration || t, t))
     if (editVideoRef.current) editVideoRef.current.currentTime = clamped
     setEditTime(clamped)
@@ -272,7 +276,7 @@ export default function PhoneApp() {
         <span className="text-sm font-semibold">Video Editor</span>
         <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/40">touch</span>
         <div className="flex-1" />
-        <Tap onClick={() => setSheet(true)} tone="accent">📁 Files</Tap>
+        <Tap onClick={() => setSheet(true)} tone="accent"><Icon name="folder" size={16} /> Files</Tap>
       </header>
 
       {/* One column on a phone. From 768px - every tablet in portrait, and a
@@ -301,7 +305,7 @@ export default function PhoneApp() {
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                 <div className="text-sm text-white/45">Nothing playing</div>
-                <Tap onClick={() => setSheet(true)} tone="accent">📁 Browse files</Tap>
+                <Tap onClick={() => setSheet(true)} tone="accent"><Icon name="folder" size={16} /> Browse files</Tap>
               </div>
             )}
           </div>
@@ -335,11 +339,11 @@ export default function PhoneApp() {
                 </div>
                 {loaded?.abs === selected.abs ? (
                   <Tap onClick={() => { seekEdit(curTime); say(`Editor → ${fmtTimecode(curTime).slice(0, 8)}`) }}>
-                    ⤓ To editor
+                    <Icon name="arrowDown" size={16} /> To editor
                   </Tap>
                 ) : (
                   <Tap onClick={() => openInEditor(selected)} disabled={exportBusy} tone="accent">
-                    ⇤ Editor
+                    <Icon name="toEditor" size={16} /> Editor
                   </Tap>
                 )}
               </div>
@@ -353,7 +357,7 @@ export default function PhoneApp() {
             <span className="text-xs font-medium text-white/55">Editor</span>
             <div className="flex-1" />
             {loaded && (
-              <Tap onClick={() => { setLoaded(null); say('Editor cleared') }}>✕</Tap>
+              <Tap onClick={() => { setLoaded(null); say('Editor cleared') }}><Icon name="close" size={16} /></Tap>
             )}
           </div>
 
@@ -387,7 +391,6 @@ export default function PhoneApp() {
               <ScrubPad
                 current={editTime}
                 duration={editDuration}
-                keyframes={keyframes}
                 onSeek={seekEdit}
               />
 
@@ -418,7 +421,7 @@ export default function PhoneApp() {
                   disabled={!editDuration || exportBusy}
                   className="min-h-[52px] flex-1 rounded-lg bg-indigo-500 text-base font-semibold text-white transition active:scale-[0.98] disabled:opacity-30"
                 >
-                  ✂ Cut here
+                  <Icon name="scissors" size={18} /> Cut here
                 </button>
                 <button
                   onClick={redo}
@@ -435,7 +438,7 @@ export default function PhoneApp() {
                 disabled={segs.length < 2 || exportBusy}
                 className="mt-2 min-h-[44px] w-full rounded-lg bg-white/10 text-sm text-white/80 transition active:scale-[0.98] disabled:opacity-30"
               >
-                ⊟ Uncut the nearest cut
+                <Icon name="merge" size={16} /> Uncut the nearest cut
               </button>
 
               {/* ---- segments -------------------------------------------- */}
@@ -513,7 +516,7 @@ export default function PhoneApp() {
                   disabled={exporting || !!activeJob || !kept.length || !outputDir.trim()}
                   className="min-h-[52px] w-full rounded-lg bg-indigo-500 text-base font-semibold text-white transition active:scale-[0.98] disabled:opacity-30"
                 >
-                  {activeJob ? 'Export running…' : `⇩ Export ${kept.length} segment${kept.length === 1 ? '' : 's'}`}
+                  {activeJob ? 'Export running…' : `<Icon name="download" size={16} /> Export ${kept.length} segment${kept.length === 1 ? '' : 's'}`}
                 </button>
 
                 {jobs.slice(0, 3).map((j) => (
@@ -531,9 +534,9 @@ export default function PhoneApp() {
             <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
               <div className="text-sm text-white/45">No clip in the editor</div>
               <div className="text-xs text-white/30">
-                Pick a film and tap <span className="text-white/50">⇤ Editor</span>.
+                Pick a film and tap <span className="text-white/50"><Icon name="toEditor" size={16} /> Editor</span>.
               </div>
-              <Tap onClick={() => setSheet(true)}>📁 Browse files</Tap>
+              <Tap onClick={() => setSheet(true)}><Icon name="folder" size={16} /> Browse files</Tap>
             </div>
           )}
         </section>
@@ -543,11 +546,11 @@ export default function PhoneApp() {
       {sheet && (
         <div className="pad-x-safe fixed inset-0 z-50 flex flex-col bg-[#141416] md:inset-y-8 md:left-1/2 md:w-[36rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-xl md:border md:border-white/15 md:shadow-2xl">
           <header className="pad-top-safe flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 md:pt-2">
-            <Tap onClick={() => openDir(parent ?? '')} disabled={!parent && cwd === ''}>↑</Tap>
+            <Tap onClick={() => openDir(parent ?? '')} disabled={!parent && cwd === ''}><Icon name="up" size={16} /></Tap>
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs text-white/50">{cwd || 'Your library'}</div>
             </div>
-            <Tap onClick={() => setSheet(false)}>✕</Tap>
+            <Tap onClick={() => setSheet(false)}><Icon name="close" size={16} /></Tap>
           </header>
 
           <div className="pad-bottom-safe min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -572,7 +575,7 @@ export default function PhoneApp() {
                   }`}
                 >
                   <span className="w-5 shrink-0 text-white/40">
-                    {e.is_dir ? '📁' : e.problem ? '⚠️' : e.is_video ? '🎬' : '📄'}
+                    {e.is_dir ? <Icon name="folder" /> : e.problem ? <Icon name="warning" className="text-amber-300" /> : e.is_video ? <Icon name="film" /> : <Icon name="file" />}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{e.name}</span>

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { fmtTimecode } from '../lib/shared'
+import Icon from '../Icon'
 
 /**
  * The timecode picker: alarm-clock wheels for hh : mm : ss : ff.
@@ -191,9 +192,9 @@ export default function TimeWheel({
       {onSnapKeyframe && (
         <button
           onClick={onSnapKeyframe}
-          className="mt-2 min-h-[44px] w-full rounded-lg bg-white/10 text-sm text-white/80 active:scale-[0.97]"
+          className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-white/10 text-sm text-white/80 active:scale-[0.97]"
         >
-          ⌖ Nearest keyframe — a cut here is free
+          <Icon name="target" size={16} /> Nearest keyframe — a cut here is free
         </button>
       )}
     </div>

@@ -10,6 +10,7 @@ ENV VITE_PHONE_PORT=$VITE_PHONE_PORT
 RUN npm run build
 
 FROM nginx:alpine
+LABEL org.opencontainers.image.title="web-video-editor"
 # apache2-utils for htpasswd (optional basic auth), openssl for a self-signed
 # certificate when there is no real one to hand.
 RUN apk add --no-cache apache2-utils openssl
