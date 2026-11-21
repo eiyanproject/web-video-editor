@@ -351,6 +351,7 @@ export default function App() {
   const [sprites, setSprites] = useState<SpriteIndex | null>(null)
   const [deep, setDeep] = useState<{ ok: boolean; errors: string[]; took_ms: number } | null>(null)
   const [deepBusy, setDeepBusy] = useState(false)
+  const [fixBusy, setFixBusy] = useState(false)
   const [indexing, setIndexing] = useState(false)
   const [peaks, setPeaks] = useState<number[] | undefined>(undefined)
   const [waveBusy, setWaveBusy] = useState(false)
@@ -1121,6 +1122,28 @@ export default function App() {
       })
       setDeep(await r.json())
     } finally { setDeepBusy(false) }
+  }
+
+  // Queues a repair and gets out of the way: the work is a normal job, so the
+  // activity panel reports it from here on rather than this button pretending
+  // to own a process that outlives the click.
+  const runFixAudio = async () => {
+    if (!selected) return
+    setFixBusy(true)
+    try {
+      const r = await fetch('/api/repair-audio', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: selected.abs }),
+      })
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}))
+        say(e.error || e.message || 'Could not start the audio repair')
+      } else {
+        say('Repairing audio — watch Activity; it writes a _fixed copy alongside')
+      }
+    } catch {
+      say('Could not reach the server')
+    } finally { setFixBusy(false) }
   }
 
   // Changing folder unmounts every row, which drops keyboard focus to <body>
@@ -1915,6 +1938,8 @@ export default function App() {
               onDeepCheck={runDeepCheck}
               deep={deep}
               busy={deepBusy}
+              onFixAudio={runFixAudio}
+              fixBusy={fixBusy}
             />
           )}
 

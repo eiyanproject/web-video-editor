@@ -264,6 +264,57 @@ fn nearest(t: f64, kf: &[f64]) -> f64 {
     if (t - a).abs() <= (b - t).abs() { a } else { b }
 }
 
+// ---------------------------------------------------------------- audio repair
+
+/// Bitrate to re-encode audio at, in kbps.
+///
+/// Matched to the source rather than fixed, then floored at 128: AAC to AAC at
+/// the source's own bitrate is where a second generation becomes audible, and a
+/// 96k track re-encoded at 96k sounds worse than the original for no gain. The
+/// floor costs a few percent of file size on a track that is a tenth of the
+/// bitrate of the video beside it.
+fn audio_kbps(probe: &media::Probe) -> u32 {
+    let track = probe.audio.first().map(|a| a.bit_rate).unwrap_or(0);
+    let from_track = if track > 0 { (track / 1000) as f64 } else { 0.0 };
+    let guess = if from_track > 0.0 {
+        from_track
+    } else if probe.bit_rate > 0 {
+        (probe.bit_rate as f64 * 0.12) / 1000.0
+    } else {
+        192.0
+    };
+    guess.max(128.0).min(320.0).round() as u32
+}
+
+/// Extra ffmpeg arguments that rebuild a broken audio timeline, or nothing.
+///
+/// Appended AFTER a `-c copy`, which it overrides for audio alone: video and
+/// subtitles stay byte-for-byte copies, and only the audio is decoded and
+/// re-encoded. That is the whole cost of this - a 95 minute stereo track is
+/// seconds of CPU next to reading the file off the share, so an export stays
+/// as fast as the disk.
+///
+/// `aresample=async=1` is the part that does the repair. Decoding alone would
+/// carry the holes through as timestamp jumps; the filter fills them with
+/// silence so the output has one continuous, regularly-framed timeline. Where
+/// the damage is inside the AAC payload rather than the sample table - frames
+/// with an impossible TNS order, or channel elements that were never allocated
+/// - the decoder drops those frames and the filter covers them too, which
+/// turns a dead player into a few milliseconds of silence.
+///
+/// Returns an empty vector when the source's audio is sound, so a clean file is
+/// never re-encoded and never loses a generation.
+fn audio_repair_args(probe: &media::Probe) -> Vec<String> {
+    if probe.audio_timeline_ok || probe.audio.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-c:a".into(), "aac".into(),
+        "-b:a".into(), format!("{}k", audio_kbps(probe)),
+        "-af".into(), "aresample=async=1:min_hard_comp=0.100:first_pts=0".into(),
+    ]
+}
+
 // ---------------------------------------------------------------- ffmpeg
 
 /// Audio bitstream fixes needed when changing container.
@@ -484,23 +535,32 @@ async fn run_smart_cut(
         let slice = if total > 0.0 { piece.span() / total * 0.85 } else { 0.0 };
 
         let args: Vec<String> = match piece {
-            Piece::Copy { start, end } => vec![
-                "-hide_banner".into(), "-nostdin".into(), "-y".into(),
-                "-ss".into(), format!("{start:.4}"),
-                "-i".into(), src.to_string_lossy().to_string(),
-                "-t".into(), format!("{:.4}", end - start),
-                "-c".into(), "copy".into(),
-                "-bsf:v".into(), bsf.into(),
-                // Without this the copied audio runs past the end of the video
-                // in the same piece; concat then starts the next piece after
-                // the longer stream, leaving a gap in the picture. Every piece
-                // must end when its video ends.
-                "-shortest".into(),
-                "-avoid_negative_ts".into(), "make_zero".into(),
-                "-f".into(), "mpegts".into(),
-                "-progress".into(), "pipe:1".into(), "-nostats".into(),
-                part.to_string_lossy().to_string(),
-            ],
+            Piece::Copy { start, end } => {
+                let mut v: Vec<String> = vec![
+                    "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+                    "-ss".into(), format!("{start:.4}"),
+                    "-i".into(), src.to_string_lossy().to_string(),
+                    "-t".into(), format!("{:.4}", end - start),
+                    "-c".into(), "copy".into(),
+                    "-bsf:v".into(), bsf.into(),
+                ];
+                // A copied piece still gets its audio rebuilt when the source's
+                // timeline is broken, or the holes would be carried into the TS
+                // and straight on into the finished file.
+                v.extend(audio_repair_args(probe));
+                v.extend([
+                    // Without this the copied audio runs past the end of the
+                    // video in the same piece; concat then starts the next piece
+                    // after the longer stream, leaving a gap in the picture.
+                    // Every piece must end when its video ends.
+                    "-shortest".into(),
+                    "-avoid_negative_ts".into(), "make_zero".into(),
+                    "-f".into(), "mpegts".into(),
+                    "-progress".into(), "pipe:1".into(), "-nostats".into(),
+                    part.to_string_lossy().to_string(),
+                ]);
+                v
+            }
             Piece::Encode { start, end } => {
                 // -ss before -i is frame accurate when transcoding: ffmpeg seeks
                 // to the preceding keyframe then decodes and discards up to the
@@ -580,6 +640,15 @@ async fn run_smart_cut(
                         "-c:a".into(), "aac".into(),
                         "-b:a".into(), format!("{kbps}k"),
                     ]);
+                    // Re-encoding alone does not repair a broken timeline - the
+                    // holes survive as timestamp jumps. The resampler is what
+                    // closes them, so a damaged source needs it here too.
+                    if !probe.audio_timeline_ok {
+                        v.extend([
+                            "-af".into(),
+                            "aresample=async=1:min_hard_comp=0.100:first_pts=0".into(),
+                        ]);
+                    }
                 } else {
                     v.extend(["-c:a".into(), "copy".into()]);
                 }
@@ -806,6 +875,19 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
         probe.audio.first().map(|a| a.codec.as_str()).unwrap_or(""),
     );
 
+    // Repairing the audio means decoding and re-encoding it, which produces
+    // AudioSpecificConfig framing by itself. Running the ADTS conversion on top
+    // of that would be converting something already converted, so the two are
+    // mutually exclusive.
+    let repair = audio_repair_args(&probe);
+    let bsf = if repair.is_empty() { bsf } else { None };
+    if !repair.is_empty() {
+        tracing::info!(
+            "export {id}: source audio timeline over-declares {:.2}s - rebuilding audio at {}k, video still copied",
+            probe.audio_timeline_drift, audio_kbps(&probe)
+        );
+    }
+
     jobs.set(&id, |j| {
         j.status = "running".into();
         j.total_seconds = total;
@@ -891,6 +973,7 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
                 "-map".into(), "0".into(),
                 "-map_metadata".into(), "0".into(),
             ];
+            args.extend(repair.iter().cloned());
             if let Some(f) = bsf { args.push("-bsf:a".into()); args.push(f.into()); }
             if matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
                 args.push("-movflags".into());
@@ -1016,6 +1099,7 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
                     "-muxdelay".into(), "0".into(),
                     "-muxpreload".into(), "0".into(),
                 ];
+                args.extend(repair.iter().cloned());
                 if let Some(f) = bsf { args.push("-bsf:a".into()); args.push(f.into()); }
                 if matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
                     args.push("-movflags".into());
@@ -1210,4 +1294,232 @@ pub async fn clear_jobs(State(st): State<AppState>) -> Json<serde_json::Value> {
     let mut m = st.jobs.map.write().await;
     m.retain(|_, j| j.status == "running" || j.status == "queued");
     Json(serde_json::json!({ "ok": true }))
+}
+
+// ---------------------------------------------------------------- audio repair
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RepairRequest {
+    pub source: String,
+    /// Overwrite an existing `_fixed` file instead of refusing.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Writes a copy of a file with its audio rebuilt, next to the original.
+///
+/// Fixing the audio at export time keeps new cuts clean, but it does nothing
+/// for previewing the source: the player still reads the original, and on Linux
+/// still dies on it. This writes the repaired file once so the original becomes
+/// playable everywhere - and because it is a sibling named `<name>_fixed.<ext>`
+/// rather than a replacement, the original is never touched and nothing has to
+/// be trusted about the result before it is seen.
+async fn run_repair(st: AppState, id: String, req: RepairRequest) {
+    let jobs = st.jobs.clone();
+    let fail = |msg: String| {
+        let jobs = jobs.clone();
+        let id = id.clone();
+        async move {
+            tracing::warn!("repair {id} failed: {msg}");
+            jobs.set(&id, |j| {
+                j.status = "failed".into();
+                j.message = msg;
+                j.finished_at = now();
+            })
+            .await;
+        }
+    };
+
+    let src = match to_real_path(&st, "", &req.source).await {
+        Ok(p) => p,
+        Err(_) => return fail("source file not found".into()).await,
+    };
+    let probe = match media::probe_path(&src).await {
+        Ok(p) => p,
+        Err(e) => return fail(format!("cannot read the source: {e:?}")).await,
+    };
+    if probe.audio.is_empty() {
+        return fail("this file has no audio track, so there is nothing to repair".into()).await;
+    }
+
+    let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| "mp4".into());
+    let target = match src.parent() {
+        Some(dir) => dir.join(format!("{stem}_fixed.{ext}")),
+        None => return fail("cannot work out where to write the repaired copy".into()).await,
+    };
+    if target.exists() && !req.overwrite {
+        return fail(format!("{} already exists", target.display())).await;
+    }
+
+    let kbps = audio_kbps(&probe);
+    jobs.set(&id, |j| {
+        j.status = "running".into();
+        j.total_seconds = probe.duration;
+        j.message = format!("rebuilding audio at {kbps}k · video copied");
+    })
+    .await;
+
+    let part = target.with_extension(format!("{ext}.part"));
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(), "-nostdin".into(), "-y".into(),
+        "-i".into(), src.to_string_lossy().to_string(),
+        // Named streams rather than `-map 0`: timecode and data tracks that
+        // some cameras leave behind cannot be muxed into MP4 and would fail the
+        // whole job. The `?` makes each one optional.
+        "-map".into(), "0:v?".into(),
+        "-map".into(), "0:a?".into(),
+        "-map".into(), "0:s?".into(),
+        "-map_metadata".into(), "0".into(),
+        // Copy everything, then override audio alone. Video is never touched.
+        "-c".into(), "copy".into(),
+        "-c:a".into(), "aac".into(),
+        "-b:a".into(), format!("{kbps}k"),
+        "-af".into(), "aresample=async=1:min_hard_comp=0.100:first_pts=0".into(),
+    ];
+    if matches!(ext.as_str(), "mp4" | "m4v" | "mov") {
+        args.push("-movflags".into());
+        args.push("+faststart".into());
+    }
+    args.push("-f".into()); args.push(muxer_for(&ext).into());
+    args.push("-progress".into()); args.push("pipe:1".into());
+    args.push("-nostats".into());
+    args.push(part.to_string_lossy().to_string());
+
+    match run_ffmpeg(&jobs, &id, args, 0.0, 1.0, probe.duration).await {
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            let cancelled = e.contains("cancelled");
+            jobs.set(&id, |j| {
+                j.status = if cancelled { "cancelled".into() } else { "failed".into() };
+                j.message = e;
+                j.finished_at = now();
+            })
+            .await;
+        }
+        Ok(()) => {
+            if tokio::fs::rename(&part, &target).await.is_err() {
+                let _ = tokio::fs::remove_file(&part).await;
+                return fail(format!("cannot finalise {}", target.display())).await;
+            }
+            let (ok, detail) = verify(&target, probe.duration).await;
+            // Whether the repair actually took, read back off the result rather
+            // than assumed: the same arithmetic that found the damage says
+            // whether it is gone.
+            let after = media::probe_path(&target).await.ok();
+            let fixed = after.as_ref().map(|p| p.audio_timeline_ok).unwrap_or(false);
+            tracing::info!(
+                "repair {id} finished: {} · verify {} · audio timeline {}",
+                target.display(),
+                if ok { "ok" } else { "FAILED" },
+                if fixed { "clean" } else { "STILL IRREGULAR" }
+            );
+            jobs.set(&id, |j| {
+                j.status = if ok { "done".into() } else { "failed".into() };
+                j.progress = 1.0;
+                j.verified = ok && fixed;
+                j.outputs = vec![target.to_string_lossy().to_string()];
+                j.finished_at = now();
+                j.message = if !ok {
+                    format!("repaired copy failed verification: {detail}")
+                } else if fixed {
+                    format!("audio repaired · {detail}")
+                } else {
+                    format!("written ({detail}), but the audio timeline is still irregular")
+                };
+            })
+            .await;
+        }
+    }
+}
+
+pub async fn start_repair(
+    State(st): State<AppState>,
+    Json(req): Json<RepairRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if req.source.trim().is_empty() {
+        return Err(ApiError::Bad("no source file given".into()));
+    }
+    // Repairing a repair would stack a third generation of audio onto a file
+    // that is already clean, and leave `x_fixed_fixed.mp4` behind to prove it.
+    let stem = Path::new(req.source.trim())
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if stem.ends_with("_fixed") {
+        return Err(ApiError::Bad(
+            "this is already a repaired copy - repair the original instead".into(),
+        ));
+    }
+
+    {
+        let m = st.jobs.map.read().await;
+        let pending = m
+            .values()
+            .filter(|j| j.status == "running" || j.status == "queued")
+            .count();
+        if pending >= MAX_PENDING_JOBS {
+            return Err(ApiError::Bad(format!(
+                "{pending} jobs are already queued - wait for those to finish, or cancel some"
+            )));
+        }
+        // One repair per file at a time. Two of these racing would both write
+        // the same `.part` and the survivor would be whichever finished last.
+        if m.values().any(|j| {
+            j.mode == "repair"
+                && j.source == req.source
+                && (j.status == "running" || j.status == "queued")
+        }) {
+            return Err(ApiError::Bad("this file is already being repaired".into()));
+        }
+    }
+
+    let id = format!("{:x}", now() as u128 * 1000 + (rand_suffix() as u128));
+    st.jobs.map.write().await.insert(
+        id.clone(),
+        Job {
+            id: id.clone(),
+            source: req.source.clone(),
+            mode: "repair".into(),
+            status: "queued".into(),
+            progress: 0.0,
+            message: "queued".into(),
+            outputs: vec![],
+            started_at: now(),
+            finished_at: 0,
+            total_seconds: 0.0,
+            snapped: vec![],
+            verified: false,
+        },
+    );
+    tracing::info!("repair {id} queued: {}", req.source);
+
+    let st2 = st.clone();
+    let id2 = id.clone();
+    tokio::spawn(async move {
+        // Queued behind exports through the same slot limit: this reads and
+        // writes a whole file over the share, which is exactly the work the cap
+        // exists to serialise.
+        if !wait_for_slot(&st2, &id2).await {
+            return;
+        }
+        let st3 = st2.clone();
+        let id3 = id2.clone();
+        if tokio::spawn(async move { run_repair(st3, id3, req).await }).await.is_err() {
+            tracing::error!("repair {id2} panicked; releasing its slot");
+            st2.jobs
+                .set(&id2, |j| {
+                    j.status = "failed".into();
+                    j.message = "the repair task crashed".into();
+                    j.finished_at = now();
+                })
+                .await;
+        }
+        st2.jobs.slot_free.notify_waiters();
+    });
+
+    Ok(Json(serde_json::json!({ "id": id })))
 }

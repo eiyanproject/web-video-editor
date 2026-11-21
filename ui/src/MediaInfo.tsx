@@ -6,8 +6,10 @@ export type Probe = {
   video_codec: string; profile: string; level: number; width: number; height: number
   pix_fmt: string; fps: number; avg_fps: number; vfr: boolean; field_order: string
   sar: string; color_space: string
-  audio: { index: number; codec: string; channels: number; sample_rate: string; language: string; browser_playable: boolean }[]
-  smartcut_ok: boolean; browser_playable: boolean; findings: Finding[]
+  audio: { index: number; codec: string; channels: number; sample_rate: string; language: string; bit_rate: number; browser_playable: boolean }[]
+  smartcut_ok: boolean; browser_playable: boolean
+  audio_timeline_ok: boolean; audio_timeline_drift: number
+  findings: Finding[]
 }
 
 const fmtSize = (n: number) => {
@@ -28,7 +30,7 @@ const TONE: Record<string, string> = {
 }
 
 export default function MediaInfo({
-  probe, keyframeCount, avgGap, onDeepCheck, deep, busy,
+  probe, keyframeCount, avgGap, onDeepCheck, deep, busy, onFixAudio, fixBusy,
 }: {
   probe: Probe
   keyframeCount: number
@@ -36,6 +38,8 @@ export default function MediaInfo({
   onDeepCheck: () => void
   deep: { ok: boolean; errors: string[]; took_ms: number } | null
   busy: boolean
+  onFixAudio: () => void
+  fixBusy: boolean
 }) {
   const [open, setOpen] = useState(false)
 
@@ -105,12 +109,21 @@ export default function MediaInfo({
             </div>
           )}
 
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button onClick={onDeepCheck} disabled={busy}
               title="Decode the first and last 20 seconds looking for real corruption"
               className="rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-40">
               {busy ? 'Checking…' : '🔍 Deep check'}
             </button>
+            {/* Only offered when the arithmetic says there is something to fix,
+                so it never invites a pointless second generation of audio. */}
+            {!probe.audio_timeline_ok && (
+              <button onClick={onFixAudio} disabled={fixBusy}
+                title="Write a copy beside this file with the audio rebuilt. The video is copied, not re-encoded, and the original is left alone."
+                className="rounded bg-indigo-500/25 px-2 py-1 text-indigo-100 hover:bg-indigo-500/40 disabled:opacity-40">
+                {fixBusy ? 'Queued…' : '🔧 Fix audio'}
+              </button>
+            )}
             {deep && (
               <span className={deep.ok ? 'text-emerald-300' : 'text-red-300'}>
                 {deep.ok

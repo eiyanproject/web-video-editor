@@ -77,6 +77,9 @@ pub struct AudioTrack {
     pub channels: i64,
     pub sample_rate: String,
     pub language: String,
+    /// Bits per second for this track alone, 0 when the container omits it.
+    /// Used to pick a re-encode bitrate that does not throw away quality.
+    pub bit_rate: u64,
     /// Whether a browser can be expected to decode it.
     pub browser_playable: bool,
 }
@@ -109,7 +112,70 @@ pub struct Probe {
     pub smartcut_ok: bool,
     /// Can the browser play it directly, without a preview transcode?
     pub browser_playable: bool,
+
+    /// False when the first audio track's sample table does not add up: the
+    /// container declares more time than its frames can account for, which
+    /// means frames went missing and the muxer stretched its neighbours to
+    /// cover the hole. See `audio_timeline_drift`.
+    ///
+    /// True also means "nothing detected", including the codecs this check
+    /// cannot reason about - it is evidence of damage, never proof of health.
+    pub audio_timeline_ok: bool,
+    /// Seconds the container over-declares against its own frame count.
+    pub audio_timeline_drift: f64,
+
     pub findings: Vec<Finding>,
+}
+
+/// Samples per packet for codecs with a fixed frame size.
+///
+/// Only the cases we can be sure of. HE-AAC packets cover 2048 output samples
+/// rather than 1024 and ffprobe's reported rate varies by build, so it is left
+/// out rather than guessed at - a wrong frame size would invent damage that is
+/// not there.
+fn frame_samples(codec: &str, profile: &str) -> Option<f64> {
+    match codec {
+        "aac" if profile.eq_ignore_ascii_case("LC") => Some(1024.0),
+        "mp3" => Some(1152.0),
+        "ac3" => Some(1536.0),
+        _ => None,
+    }
+}
+
+/// Does the first audio track's declared duration match its frame count?
+///
+/// A healthy track is `nb_frames * frame_size / sample_rate` long, give or take
+/// one frame of encoder priming. When the container claims materially more, the
+/// extra is holes: frames the muxer could not write, papered over by inflating
+/// the duration of whichever sample came before.
+///
+/// This matters well beyond tidiness. Chromium on Linux decodes AAC with the
+/// same FFmpeg that ffprobe uses, and FFmpeg refuses a packet whose declared
+/// span disagrees with what it decodes - which Chromium escalates to a fatal
+/// PIPELINE_ERROR_DECODE, killing playback. The platform decoders on Windows
+/// and Android skip the bad frame and carry on, so the identical file plays
+/// there. One file, three verdicts, and only this arithmetic explains it.
+///
+/// Returns (ok, drift_seconds). Unknown is reported as ok: absence of evidence.
+fn audio_timeline(streams: &[serde_json::Value]) -> (bool, f64) {
+    let Some(a) = streams.iter().find(|s| jstr(s, "codec_type") == "audio") else {
+        return (true, 0.0);
+    };
+    let Some(fsz) = frame_samples(&jstr(a, "codec_name"), &jstr(a, "profile")) else {
+        return (true, 0.0);
+    };
+    let rate: f64 = jstr(a, "sample_rate").parse().unwrap_or(0.0);
+    let frames = jint(a, "nb_frames") as f64;
+    let declared: f64 = jstr(a, "duration").parse().unwrap_or(0.0);
+    if rate <= 0.0 || frames <= 0.0 || declared <= 0.0 {
+        return (true, 0.0);
+    }
+
+    let drift = declared - frames * fsz / rate;
+    // One frame of slack absorbs priming and the final partial packet; a tenth
+    // of a second on top keeps ordinary rounding from reading as damage.
+    let slack = fsz / rate + 0.1;
+    (drift <= slack, drift.max(0.0))
 }
 
 fn ratio_to_f64(s: &str) -> f64 {
@@ -202,6 +268,7 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
                 field_order: String::new(), sar: String::new(), color_space: String::new(),
                 audio: vec![],
                 smartcut_ok: false, browser_playable: false,
+                audio_timeline_ok: true, audio_timeline_drift: 0.0,
                 findings,
             });
         }
@@ -259,10 +326,25 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
                     .and_then(|l| l.as_str())
                     .unwrap_or("")
                     .to_string(),
+                bit_rate: jint(s, "bit_rate").max(0) as u64,
                 browser_playable: matches!(c.as_str(), "aac" | "mp3" | "opus" | "vorbis" | "flac"),
             }
         })
         .collect();
+
+    let (audio_timeline_ok, audio_timeline_drift) = audio_timeline(streams);
+    if !audio_timeline_ok {
+        findings.push(Finding {
+            level: "warn".into(),
+            message: format!(
+                "Audio timeline is {audio_timeline_drift:.1}s longer than its frames account for, \
+                 so frames are missing and their gaps have been padded over. Chromium on Linux \
+                 treats that as a fatal decode error and stops playback, while Windows and phones \
+                 play it regardless. Exports repair the audio automatically; use Fix audio to \
+                 write a repaired copy of the file itself."
+            ),
+        });
+    }
 
     // Browser playback is a separate question from whether we can edit it.
     let video_ok = matches!(codec.as_str(), "h264" | "vp8" | "vp9" | "av1")
@@ -313,6 +395,8 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
         audio,
         smartcut_ok,
         browser_playable,
+        audio_timeline_ok,
+        audio_timeline_drift,
         findings,
     })
 }

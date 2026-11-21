@@ -1728,6 +1728,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/edit", get(edit::load_edit).post(edit::save_edit).delete(edit::delete_edit))
         .route("/api/edits", get(edit::list_edits))
         .route("/api/export", post(export::start_export))
+        .route("/api/repair-audio", post(export::start_repair))
         .route("/api/jobs", get(export::list_jobs))
         .route("/api/jobs/clear", post(export::clear_jobs))
         .route("/api/jobs/:id/cancel", post(export::cancel_job))

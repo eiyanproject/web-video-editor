@@ -87,12 +87,23 @@ export function diagnose(el: HTMLVideoElement): Diagnosis {
           'was interrupted mid-stream.',
       }
     case 3:
+      // Which stream failed is the whole difference between "nothing can be
+      // done here" and "there is a button for this". Chromium names it in the
+      // message: a damaged audio packet reads as "Failed to send audio packet
+      // for decoding", and that case is repairable, so say so rather than
+      // sending the user to a deep check that only reads the first and last
+      // twenty seconds and will almost certainly come back clean.
       return {
         kind: 'decode',
         detail,
-        message:
-          'Decode error: the stream is damaged at this point. The browser can handle this format, ' +
-          'so this is the file rather than the player — run the deep check from the media panel.',
+        message: /audio/i.test(err?.message || '')
+          ? 'Decode error in the audio: a damaged or missing audio frame, which this browser ' +
+            'refuses while Windows and phones skip past it. The video is fine and exports repair ' +
+            'the audio automatically — use Fix audio in the media panel to make this file ' +
+            'playable here too.'
+          : 'Decode error: the stream is damaged at this point. The browser can handle this ' +
+            'format, so this is the file rather than the player — run the deep check from the ' +
+            'media panel.',
       }
     case 4:
       return {
