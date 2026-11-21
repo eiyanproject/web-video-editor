@@ -7,6 +7,7 @@ import {
 import type { Probe } from '../MediaInfo'
 import { useSegments, splitAt, toggleKeep, mergeAt, snapToKeyframe, normalise, keptDuration } from '../segments'
 import Icon from '../Icon'
+import { diagnose, reportPlaybackError, reportCodecSupportOnce } from '../lib/playback'
 import ScrubPad from './ScrubPad'
 import TimeWheel from './TimeWheel'
 
@@ -109,6 +110,8 @@ export default function PhoneApp() {
       .then((d) => { setEntries(d.entries); setCwd(d.path); setParent(d.parent) })
       .catch(() => openDir(''))
   }, [])
+
+  useEffect(() => { reportCodecSupportOnce() }, [])
 
   useEffect(() => {
     fetch('/api/settings').then((r) => r.json())
@@ -299,6 +302,13 @@ export default function PhoneApp() {
                 preload="metadata"
                 className="h-full w-full"
                 onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
+                onError={() => {
+                  const v = videoRef.current
+                  if (!v) return
+                  const d = diagnose(v)
+                  say(d.message.slice(0, 120))
+                  reportPlaybackError(d, selected?.abs)
+                }}
                 onTimeUpdate={() => setCurTime(videoRef.current?.currentTime ?? 0)}
                 onSeeked={() => setCurTime(videoRef.current?.currentTime ?? 0)}
               />
@@ -383,6 +393,13 @@ export default function PhoneApp() {
                   preload="metadata"
                   className="h-auto w-full"
                   onLoadedMetadata={() => setEditDuration(editVideoRef.current?.duration ?? 0)}
+                  onError={() => {
+                    const v = editVideoRef.current
+                    if (!v) return
+                    const d = diagnose(v)
+                    say(d.message.slice(0, 120))
+                    reportPlaybackError(d, loaded?.abs)
+                  }}
                   onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                   onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                 />

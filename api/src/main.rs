@@ -443,6 +443,8 @@ pub struct AppState {
     pub jobs: export::Jobs,
     pub limits: Limits,
     pub metrics: obs::Metrics,
+    /// Last client-reported line and when, for dedupe.
+    pub last_client_log: Arc<Mutex<Option<(String, std::time::Instant)>>>,
 }
 
 fn now_secs() -> u64 {
@@ -1353,6 +1355,71 @@ async fn metrics(State(st): State<AppState>) -> Response {
         .into_response()
 }
 
+// ---------------------------------------------------------------- client log
+
+#[derive(Deserialize)]
+struct ClientLog {
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    msg: String,
+    /// Structured context - codec support, media error code, readyState. Values
+    /// are stringified by the client and capped here.
+    #[serde(default)]
+    detail: std::collections::BTreeMap<String, String>,
+}
+
+/// Anything the browser reports, written into the same ring the server logs to.
+///
+/// Playback happens entirely in the browser, so until now a player that refused
+/// to decode produced nothing anywhere on the server - the log showed a healthy
+/// box while the user watched an error. The one place the failure exists is the
+/// client, so the client has to say so.
+///
+/// Trusted only as far as it needs to be: level is a closed set, lengths are
+/// capped, and identical messages inside a short window are dropped so a render
+/// loop cannot flood the ring and push out everything else.
+async fn post_client_log(
+    State(st): State<AppState>,
+    Json(c): Json<ClientLog>,
+) -> Json<serde_json::Value> {
+    let msg = c.msg.chars().filter(|ch| !ch.is_control()).take(400).collect::<String>();
+    if msg.trim().is_empty() {
+        return Json(serde_json::json!({ "ok": false, "reason": "empty" }));
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for (k, v) in c.detail.iter().take(12) {
+        let k: String = k.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(24).collect();
+        let v: String = v.chars().filter(|ch| !ch.is_control()).take(120).collect();
+        if !k.is_empty() {
+            parts.push(format!("{k}={v}"));
+        }
+    }
+    let line = if parts.is_empty() { msg.clone() } else { format!("{msg} · {}", parts.join(" ")) };
+
+    // Drop a repeat of the same line within ten seconds. A <video> that cannot
+    // decode fires error on every seek and every source change.
+    {
+        let mut last = st.last_client_log.lock().unwrap();
+        let now = std::time::Instant::now();
+        if let Some((prev, at)) = last.as_ref() {
+            if prev == &line && now.duration_since(*at).as_secs() < 10 {
+                return Json(serde_json::json!({ "ok": true, "deduped": true }));
+            }
+        }
+        *last = Some((line.clone(), now));
+    }
+
+    match c.level.to_lowercase().as_str() {
+        "error" => tracing::error!(target: "veditor_api::client", "{line}"),
+        "warn" => tracing::warn!(target: "veditor_api::client", "{line}"),
+        _ => tracing::info!(target: "veditor_api::client", "{line}"),
+    }
+    st.metrics.error("client_playback");
+    Json(serde_json::json!({ "ok": true }))
+}
+
 // ---------------------------------------------------------------- telemetry
 
 #[derive(Deserialize)]
@@ -1587,6 +1654,7 @@ async fn main() -> anyhow::Result<()> {
         jobs: export::Jobs::default(),
         limits: Limits::default(),
         metrics: obs::Metrics::default(),
+        last_client_log: Arc::new(Mutex::new(None)),
     };
 
     // Beside settings.json, which is the path already bind-mounted to survive a
@@ -1644,6 +1712,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/check-path", post(check_path))
         .route("/api/logs", get(get_logs))
         .route("/api/telemetry", get(get_telemetry).post(post_telemetry).delete(clear_telemetry))
+        .route("/api/client-log", post(post_client_log))
         .route("/api/logs/clear", post(clear_logs))
         // ---- Phase 1: media analysis ----
         .route("/api/probe", get(media::get_probe))

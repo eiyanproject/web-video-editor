@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Icon, { type IconName } from './Icon'
 import Activity from './Activity'
 import { track, installTelemetryFlush } from './lib/telemetry'
+import { diagnose, reportPlaybackError, reportCodecSupportOnce } from './lib/playback'
 import Settings from './Settings'
 import Logs from './Logs'
 import Scrubber, { type SpriteIndex } from './Scrubber'
@@ -70,18 +71,6 @@ const FIELD_OF: Record<number, [number, number]> = {
 /** Strips anything that is not part of a timecode. Guards paste and IME input. */
 function sanitiseTimecode(v: string): string {
   return v.replace(/[^0-9:.]/g, '').slice(0, 12)
-}
-
-function describeMediaError(v: HTMLVideoElement): string {
-  const e = v.error
-  if (!e) return 'Playback failed for an unknown reason.'
-  switch (e.code) {
-    case 1: return 'Loading was aborted.'
-    case 2: return 'Network error while reading the file — the share may have dropped.'
-    case 3: return 'DECODE ERROR: the file is corrupt or truncated. Playback stopped partway.'
-    case 4: return 'This browser cannot play this file. Either the container/codec is unsupported (HEVC, MKV, AC3) or the file is damaged. Export is unaffected — Phase 1 will tell you which.'
-    default: return e.message || 'Playback failed.'
-  }
 }
 
 /** Turns a literal English title into a stable id. Titles are constants in
@@ -1201,6 +1190,11 @@ export default function App() {
 
   useEffect(() => { loadRoots() }, [])
 
+  // Says once, at startup, whether this browser can decode anything we serve.
+  // Without it the log's first sign of trouble is an error on a file, which
+  // looks like a problem with the file.
+  useEffect(() => { reportCodecSupportOnce() }, [])
+
   // ---- session persistence -------------------------------------------------
   // Restoring the open clip and its playback position across a reload. The file
   // is verified to still exist first: a share that is not mounted yet, or a file
@@ -1850,7 +1844,13 @@ export default function App() {
                 }}
                 onTimeUpdate={() => setCurTime(videoRef.current?.currentTime ?? 0)}
                 onSeeked={() => setCurTime(videoRef.current?.currentTime ?? 0)}
-                onError={() => videoRef.current && setPlayError(describeMediaError(videoRef.current))} />
+                onError={() => {
+                  const v = videoRef.current
+                  if (!v) return
+                  const d = diagnose(v)
+                  setPlayError(d.message)
+                  reportPlaybackError(d, selected?.abs)
+                }} />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-white/30">Select a video</div>
             )}
