@@ -123,8 +123,45 @@ pub struct Probe {
     pub audio_timeline_ok: bool,
     /// Seconds the container over-declares against its own frame count.
     pub audio_timeline_drift: f64,
+    /// Absolute path of a usable `<name>_fixed.<ext>` sibling, or empty.
+    ///
+    /// Only the PLAYER should follow this. Cutting, keyframe indexing and export
+    /// stay pointed at the original: the repair copies video byte for byte, so
+    /// an index built from either file is the same index, and exporting from the
+    /// original keeps the audio one generation old rather than two.
+    pub repaired: String,
 
     pub findings: Vec<Finding>,
+}
+
+/// A repaired sibling worth playing instead, if one is already there.
+///
+/// Existence and a non-zero size only. Deliberately not a duration or stream
+/// comparison: that would mean a second ffprobe on every probe of every file,
+/// and the repair job already verifies its own output before it renames the
+/// `.part` into place, so anything sitting at this name got there by passing
+/// that check.
+async fn repaired_sibling(p: &Path) -> String {
+    let Some(stem) = p.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+        return String::new();
+    };
+    // A repaired file is not itself repairable, so it never points at another.
+    if stem.to_lowercase().ends_with("_fixed") {
+        return String::new();
+    }
+    let ext = p.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let name = if ext.is_empty() {
+        format!("{stem}_fixed")
+    } else {
+        format!("{stem}_fixed.{ext}")
+    };
+    let Some(cand) = p.parent().map(|d| d.join(name)) else {
+        return String::new();
+    };
+    match tokio::fs::metadata(&cand).await {
+        Ok(m) if m.is_file() && m.len() > 0 => cand.to_string_lossy().to_string(),
+        _ => String::new(),
+    }
 }
 
 /// Samples per packet for codecs with a fixed frame size.
@@ -269,6 +306,7 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
                 audio: vec![],
                 smartcut_ok: false, browser_playable: false,
                 audio_timeline_ok: true, audio_timeline_drift: 0.0,
+                repaired: String::new(),
                 findings,
             });
         }
@@ -333,15 +371,22 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
         .collect();
 
     let (audio_timeline_ok, audio_timeline_drift) = audio_timeline(streams);
+    // Only looked for when there is damage to answer for, so a healthy file
+    // costs no extra filesystem call - which matters on a network share.
+    let repaired = if audio_timeline_ok { String::new() } else { repaired_sibling(p).await };
     if !audio_timeline_ok {
         findings.push(Finding {
             level: "warn".into(),
+            // Deliberately says nothing about whether a repaired copy exists.
+            // This text is cached with the probe, and whether a sibling is
+            // there changes without the file changing - so a message mentioning
+            // it would be wrong within seconds. The player says that part.
             message: format!(
                 "Audio timeline is {audio_timeline_drift:.1}s longer than its frames account for, \
                  so frames are missing and their gaps have been padded over. Chromium on Linux \
                  treats that as a fatal decode error and stops playback, while Windows and phones \
-                 play it regardless. Exports repair the audio automatically; use Fix audio to \
-                 write a repaired copy of the file itself."
+                 play it regardless. Loading this clip into the editor repairs it automatically, \
+                 and exports are repaired either way."
             ),
         });
     }
@@ -397,6 +442,7 @@ async fn run_probe(p: &Path) -> Result<Probe, ApiError> {
         browser_playable,
         audio_timeline_ok,
         audio_timeline_drift,
+        repaired,
         findings,
     })
 }
@@ -424,7 +470,20 @@ pub async fn get_probe(
 
     if !q.refresh {
         if let Ok(s) = tokio::fs::read_to_string(&file).await {
-            if let Ok(v) = serde_json::from_str::<Probe>(&s) {
+            if let Ok(mut v) = serde_json::from_str::<Probe>(&s) {
+                // Every other field describes the file, and the cache key is
+                // the file's size and mtime - so they stay true for as long as
+                // the entry lives. `repaired` describes the FOLDER, and a
+                // repair finishing changes it without touching the original at
+                // all, which would leave a cached probe permanently claiming
+                // there is no repaired copy. Recomputed on every read instead:
+                // one metadata call, and only for a file already known to be
+                // damaged.
+                v.repaired = if v.audio_timeline_ok {
+                    String::new()
+                } else {
+                    repaired_sibling(&p).await
+                };
                 return Ok(Json(v));
             }
         }

@@ -9,6 +9,8 @@ export type Probe = {
   audio: { index: number; codec: string; channels: number; sample_rate: string; language: string; bit_rate: number; browser_playable: boolean }[]
   smartcut_ok: boolean; browser_playable: boolean
   audio_timeline_ok: boolean; audio_timeline_drift: number
+  /** A `_fixed` sibling to PLAY instead. Cutting and export still use `path`. */
+  repaired: string
   findings: Finding[]
 }
 

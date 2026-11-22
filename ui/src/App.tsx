@@ -363,6 +363,7 @@ export default function App() {
   // current handlers without re-binding a capture-phase listener every render.
   const probeRef = useRef<Probe | null>(null)
   const selectedRef = useRef<Entry | null>(null)
+  const loadedRef = useRef<Entry | null>(null)
   const focusListRef = useRef<(() => void) | null>(null)
   const focusFilterRef = useRef<(() => void) | null>(null)
   const openPasteRef = useRef<(() => void) | null>(null)
@@ -668,6 +669,7 @@ export default function App() {
 
   probeRef.current = probe
   selectedRef.current = selected
+  loadedRef.current = loaded
 
   // --- keyboard actions -----------------------------------------------------
   focusListRef.current = () => {
@@ -836,6 +838,32 @@ export default function App() {
     })()
     return () => { cancelled = true }
   }, [loaded?.abs])
+
+  // Broken audio is repaired when a clip is LOADED INTO THE EDITOR - not when
+  // it is merely previewed, and not while browsing.
+  //
+  // That distinction is the entire safety argument. Walking a folder probes
+  // every file in it, and a repair reads and writes a whole film over the
+  // share; doing that on selection would turn scrolling a list into hundreds of
+  // gigabytes of traffic. Loading a clip into the editor is a deliberate
+  // commitment to work on that film, so the cost is bounded by how many films
+  // are actually being edited - and it is paid once, because from then on the
+  // probe reports the repaired sibling and this never fires again.
+  const autoRepairTried = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!loaded || !loadedProbe) return
+    if (loadedProbe.audio_timeline_ok || loadedProbe.repaired) return
+    const key = loaded.abs
+    if (autoRepairTried.current.has(key)) return
+    autoRepairTried.current.add(key)
+
+    let cancelled = false
+    ;(async () => {
+      const id = await startFixAudio(key, true)
+      if (id) await awaitRepair(id, key, () => cancelled)
+    })()
+    return () => { cancelled = true }
+  }, [loaded?.abs, loadedProbe])
 
   // Arrow keys jump 5 seconds.
   //
@@ -1127,22 +1155,70 @@ export default function App() {
   // Queues a repair and gets out of the way: the work is a normal job, so the
   // activity panel reports it from here on rather than this button pretending
   // to own a process that outlives the click.
-  const runFixAudio = async () => {
-    if (!selected) return
-    setFixBusy(true)
+  //
+  // Returns the job id so a caller can wait for it. `auto` only silences the
+  // complaints: a repair that was never asked for should not interrupt with a
+  // toast when it turns out the server is already doing it.
+  const startFixAudio = async (path: string, auto = false): Promise<string | null> => {
     try {
       const r = await fetch('/api/repair-audio', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ source: selected.abs }),
+        body: JSON.stringify({ source: path }),
       })
+      const j = await r.json().catch(() => ({}) as any)
       if (!r.ok) {
-        const e = await r.json().catch(() => ({}))
-        say(e.error || e.message || 'Could not start the audio repair')
-      } else {
-        say('Repairing audio — watch Activity; it writes a _fixed copy alongside')
+        if (!auto) say(j.error || j.message || 'Could not start the audio repair')
+        return null
       }
+      say(auto
+        ? 'Audio needs repairing — rebuilding it in the background'
+        : 'Repairing audio — watch Activity; it writes a _fixed copy alongside')
+      return j.id ?? null
     } catch {
-      say('Could not reach the server')
+      if (!auto) say('Could not reach the server')
+      return null
+    }
+  }
+
+  /**
+   * Waits for a repair job, then re-probes the file it repaired.
+   *
+   * The re-probe is the whole point: `repaired` is what the player follows, and
+   * it only appears once the probe is taken again. Both panes are refreshed,
+   * because the preview and the editor keep separate probes of what may well be
+   * the same file - updating one and not the other leaves the clip repaired in
+   * the editor and still undecodable in the preview.
+   */
+  const awaitRepair = async (id: string, path: string, cancelled = () => false) => {
+    for (let i = 0; i < 900 && !cancelled(); i++) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const js = await fetch('/api/jobs').then((r) => r.json()).catch(() => null)
+      const j = Array.isArray(js) ? js.find((x: any) => x.id === id) : null
+      if (!j) return
+      if (j.status === 'queued' || j.status === 'running') continue
+      if (cancelled()) return
+      if (j.status !== 'done') {
+        say(j.message || 'The audio repair did not finish')
+        return
+      }
+      const lp = await fetch(`/api/probe?path=${encodeURIComponent(path)}`)
+        .then((r) => r.json())
+        .catch(() => null)
+      if (cancelled() || !lp || lp.error) return
+      if (selectedRef.current?.abs === path) setProbe(lp)
+      if (loadedRef.current?.abs === path) setLoadedProbe(lp)
+      say('Audio repaired — now playing the fixed copy')
+      return
+    }
+  }
+
+  const runFixAudio = async () => {
+    if (!selected) return
+    const path = selected.abs
+    setFixBusy(true)
+    try {
+      const id = await startFixAudio(path)
+      if (id) await awaitRepair(id, path)
     } finally { setFixBusy(false) }
   }
 
@@ -1396,7 +1472,13 @@ export default function App() {
   const nothingConnected = atHome && (entries.length === 0 || unavailable === entries.length)
   const goConnect = () => { setWantShare(true); setPage('settings') }
 
-  const srcUrl = selected ? `/api/stream?path=${encodeURIComponent(selected.abs)}` : undefined
+  // The player follows a repaired copy when there is one; everything else in the
+  // app keeps using `selected.abs`. Only the <video> src changes, because only
+  // the browser's decoder is the thing that cannot cope with the original.
+  const playPath = (p: Probe | null, fallback: string) => p?.repaired || fallback
+  const srcUrl = selected
+    ? `/api/stream?path=${encodeURIComponent(playPath(probe, selected.abs))}`
+    : undefined
 
   if (page === 'logs') return <Logs onClose={() => setPage('edit')} />
   if (page === 'batch') return <Batch onClose={() => setPage('edit')} />
@@ -1599,8 +1681,12 @@ export default function App() {
                     <div className="w-full bg-black">
                       <video
                         ref={editVideoRef}
-                        key={loaded.abs}
-                        src={`/api/stream?path=${encodeURIComponent(loaded.abs)}`}
+                        // Keyed on what is being PLAYED, not on the clip: when a
+                        // repair lands mid-edit the element has to remount to
+                        // pick up the new source. The cut list is keyed to the
+                        // original and is untouched by this.
+                        key={playPath(loadedProbe, loaded.abs)}
+                        src={`/api/stream?path=${encodeURIComponent(playPath(loadedProbe, loaded.abs))}`}
                         controls
                         preload="metadata"
                         className={
@@ -1923,6 +2009,13 @@ export default function App() {
                 disabled: !selected, onClick: rebuildThumbs },
               { icon: 'wave', label: waveBusy ? 'Reading audio…' : waveAuto ? 'Waveform: on' : 'Waveform: off',
                 disabled: waveBusy, onClick: toggleWaveAuto },
+              // Only when there is damage and nothing has fixed it yet. Loading
+              // the clip into the editor does this on its own; this is for
+              // repairing a file you are only previewing.
+              ...(probe && !probe.audio_timeline_ok && !probe.repaired
+                ? [{ icon: 'wave' as IconName, label: fixBusy ? 'Repairing audio…' : 'Fix audio',
+                     disabled: fixBusy, onClick: runFixAudio }]
+                : []),
               { icon: 'list', label: showMediaInfo ? 'Hide media info' : 'Show media info',
                 onClick: toggleMediaInfo },
               { icon: 'eject', label: 'Close this video', hint: 'U',
@@ -1943,10 +2036,33 @@ export default function App() {
             />
           )}
 
+          {/* Said out loud rather than left to be inferred from a filename:
+              what is on screen is not the file in the list. */}
+          {probe?.repaired && (
+            // Quiet on purpose. Green means "succeeded" in this app and the
+            // accent means "your action"; this is neither, just context about
+            // what is on screen, so it gets the same muted note treatment as
+            // the other standing explanations.
+            <div className="border-t border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/55">
+              Playing a repaired copy — this clip's audio was damaged. The original is untouched,
+              and cuts and exports still read it.
+            </div>
+          )}
+
           {playError && (
             <div className="border-l-2 border-red-400 bg-red-500/20 px-3 py-2 text-xs text-red-100">
               <b>Cannot play {selected?.name}</b>
               <div className="mt-0.5">{playError}</div>
+              {/* The fix, at the point of failure. This used to live only in a
+                  panel that is hidden by default, inside an accordion that
+                  starts collapsed - three steps from the error that calls for
+                  it. */}
+              {probe && !probe.audio_timeline_ok && !probe.repaired && (
+                <button onClick={runFixAudio} disabled={fixBusy}
+                  className="mt-1.5 rounded bg-indigo-500/30 px-2 py-1 text-indigo-100 hover:bg-indigo-500/50 disabled:opacity-40">
+                  {fixBusy ? 'Repairing…' : 'Fix audio'}
+                </button>
+              )}
             </div>
           )}
           {selected?.problem && (
