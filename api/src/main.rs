@@ -441,6 +441,11 @@ pub struct AppState {
     /// a duplicate ffmpeg over the same (often network-backed) file.
     pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
     pub jobs: export::Jobs,
+    /// Repaired `_fixed` previews THIS process wrote, so an export can delete
+    /// the one it was playing through and nothing else. A file the user named
+    /// `holiday_fixed.mp4` themselves matches the same convention, and guessing
+    /// wrong there destroys their work - so only our own writes are listed.
+    pub repairs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
     pub limits: Limits,
     pub metrics: obs::Metrics,
     /// Last client-reported line and when, for dedupe.
@@ -1652,6 +1657,7 @@ async fn main() -> anyhow::Result<()> {
         status: Arc::new(RwLock::new(std::collections::HashMap::new())),
         sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         jobs: export::Jobs::default(),
+        repairs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         limits: Limits::default(),
         metrics: obs::Metrics::default(),
         last_client_log: Arc::new(Mutex::new(None)),

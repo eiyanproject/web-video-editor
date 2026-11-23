@@ -1164,6 +1164,20 @@ async fn run_export(st: AppState, id: String, req: ExportRequest) {
             .await;
         }
     }
+
+    // Whatever the outcome. The repaired copy only ever existed so the browser
+    // could play a source it refused to decode, and the export reads the
+    // ORIGINAL - so once this job is over, nothing needs it. Leaving it behind
+    // would put a second copy of every film ever edited on the share.
+    //
+    // Run on failure and cancellation too, by the user's choice: the file is
+    // scratch, and one button press rebuilds it.
+    //
+    // Deliberately NOT reached by the pre-flight rejections above - an unusable
+    // output folder or a segment list that came to nothing never rendered
+    // anything, and killing the preview over a typo'd destination the user is
+    // about to correct would be gratuitous.
+    drop_repair_for(&st, &src).await;
 }
 
 /// Most anyone legitimately queues at once is a batch remux of one folder.
@@ -1298,6 +1312,43 @@ pub async fn clear_jobs(State(st): State<AppState>) -> Json<serde_json::Value> {
 
 // ---------------------------------------------------------------- audio repair
 
+/// Where a file's repaired copy goes: `<stem>_fixed.<ext>` beside the original.
+///
+/// One function, used by both the write and the delete, so the two can never
+/// disagree about the name - a drift there would either orphan every copy or
+/// point the delete at a file nobody wrote.
+fn repaired_path(src: &Path) -> Option<PathBuf> {
+    let stem = src.file_stem()?.to_string_lossy().to_string();
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| "mp4".into());
+    Some(src.parent()?.join(format!("{stem}_fixed.{ext}")))
+}
+
+/// Removes the repaired preview copy of `src`, if this process wrote one.
+///
+/// The registry check is the safety argument, not an optimisation. Matching on
+/// the name alone would also match a `holiday_fixed.mp4` the user made and
+/// kept, and deleting that destroys their work. Only paths written by a repair
+/// job in this process are eligible, so the worst case after a restart is a
+/// leftover file - never a lost one.
+async fn drop_repair_for(st: &AppState, src: &Path) {
+    let Some(target) = repaired_path(src) else { return };
+    {
+        let mut reg = st.repairs.write().await;
+        if !reg.remove(&target) {
+            return;
+        }
+    }
+    match tokio::fs::remove_file(&target).await {
+        Ok(()) => tracing::info!("removed repaired preview copy {}", target.display()),
+        // Already gone, or the share went away. Either way the registry entry
+        // is spent and there is nothing for the caller to do about it.
+        Err(e) => tracing::warn!("could not remove {}: {e}", target.display()),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct RepairRequest {
     pub source: String,
@@ -1342,13 +1393,12 @@ async fn run_repair(st: AppState, id: String, req: RepairRequest) {
         return fail("this file has no audio track, so there is nothing to repair".into()).await;
     }
 
-    let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let ext = src
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_else(|| "mp4".into());
-    let target = match src.parent() {
-        Some(dir) => dir.join(format!("{stem}_fixed.{ext}")),
+    let target = match repaired_path(&src) {
+        Some(t) => t,
         None => return fail("cannot work out where to write the repaired copy".into()).await,
     };
     if target.exists() && !req.overwrite {
@@ -1405,6 +1455,11 @@ async fn run_repair(st: AppState, id: String, req: RepairRequest) {
                 let _ = tokio::fs::remove_file(&part).await;
                 return fail(format!("cannot finalise {}", target.display())).await;
             }
+            // Recorded the moment it exists, which is what later licenses an
+            // export to delete it. Registered even if verification goes on to
+            // fail: the file is on disk either way, and a copy we wrote and
+            // cannot vouch for is exactly the one worth clearing away.
+            st.repairs.write().await.insert(target.clone());
             let (ok, detail) = verify(&target, probe.duration).await;
             // Whether the repair actually took, read back off the result rather
             // than assumed: the same arithmetic that found the damage says

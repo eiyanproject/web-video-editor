@@ -99,8 +99,7 @@ export function diagnose(el: HTMLVideoElement): Diagnosis {
         message: /audio/i.test(err?.message || '')
           ? 'Decode error in the audio: a damaged or missing audio frame, which this browser ' +
             'refuses while Windows and phones skip past it. The video is fine and exports repair ' +
-            'the audio automatically — use Fix audio in the media panel to make this file ' +
-            'playable here too.'
+            'the audio automatically — press Fix audio to make this file playable here too.'
           : 'Decode error: the stream is damaged at this point. The browser can handle this ' +
             'format, so this is the file rather than the player — run the deep check from the ' +
             'media panel.',

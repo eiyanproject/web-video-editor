@@ -118,10 +118,12 @@ export default function MediaInfo({
               {busy ? 'Checking…' : '🔍 Deep check'}
             </button>
             {/* Only offered when the arithmetic says there is something to fix,
-                so it never invites a pointless second generation of audio. */}
-            {!probe.audio_timeline_ok && (
+                so it never invites a pointless second generation of audio.
+                Duplicates the strip under the player on purpose: this panel is
+                where the damage is explained, so the fix belongs beside it. */}
+            {!probe.audio_timeline_ok && !probe.repaired && (
               <button onClick={onFixAudio} disabled={fixBusy}
-                title="Write a copy beside this file with the audio rebuilt. The video is copied, not re-encoded, and the original is left alone."
+                title="Write a copy beside this file with the audio rebuilt. The video is copied, not re-encoded, the original is left alone, and the copy is deleted once you export."
                 className="rounded bg-indigo-500/25 px-2 py-1 text-indigo-100 hover:bg-indigo-500/40 disabled:opacity-40">
                 {fixBusy ? 'Queued…' : '🔧 Fix audio'}
               </button>

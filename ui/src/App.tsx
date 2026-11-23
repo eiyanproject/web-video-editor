@@ -282,12 +282,24 @@ export default function App() {
   // remux started on the phone, or in another browser tab, has to lock this
   // one too. Fast while something runs, lazy otherwise.
   const [runningJob, setRunningJob] = useState<{ status: string; message: string } | null>(null)
+  // The newest `finished_at` on the queue, which is how anything here learns
+  // that a job ENDED.
+  //
+  // Watching the busy flag fall instead does not work, and the reason is worth
+  // keeping: the idle poll is eight seconds apart, and a short export starts
+  // and finishes inside one of those gaps. The flag never goes true, so no
+  // edge is ever seen - and the one thing that has to happen when an export
+  // ends silently does not. A high-water mark survives the gap, because the
+  // finished job is still sitting in the list when the next poll arrives.
+  const [lastFinished, setLastFinished] = useState<number | null>(null)
   useEffect(() => {
     const poll = () =>
       fetch('/api/jobs')
         .then((r) => r.json())
-        .then((js: any[]) =>
-          setRunningJob(js.find((j) => j.status === 'running' || j.status === 'queued') ?? null))
+        .then((js: any[]) => {
+          setRunningJob(js.find((j) => j.status === 'running' || j.status === 'queued') ?? null)
+          setLastFinished(js.reduce((m, j) => Math.max(m, j.finished_at || 0), 0))
+        })
         .catch(() => {})
     poll()
     const id = setInterval(poll, runningJob ? 1000 : 8000)
@@ -362,6 +374,7 @@ export default function App() {
   // The global key handler is registered once; these refs let it reach the
   // current handlers without re-binding a capture-phase listener every render.
   const probeRef = useRef<Probe | null>(null)
+  const loadedProbeRef = useRef<Probe | null>(null)
   const selectedRef = useRef<Entry | null>(null)
   const loadedRef = useRef<Entry | null>(null)
   const focusListRef = useRef<(() => void) | null>(null)
@@ -668,6 +681,7 @@ export default function App() {
   }
 
   probeRef.current = probe
+  loadedProbeRef.current = loadedProbe
   selectedRef.current = selected
   loadedRef.current = loaded
 
@@ -839,31 +853,53 @@ export default function App() {
     return () => { cancelled = true }
   }, [loaded?.abs])
 
-  // Broken audio is repaired when a clip is LOADED INTO THE EDITOR - not when
-  // it is merely previewed, and not while browsing.
+  // Repairing broken audio is a BUTTON, never automatic.
   //
-  // That distinction is the entire safety argument. Walking a folder probes
-  // every file in it, and a repair reads and writes a whole film over the
-  // share; doing that on selection would turn scrolling a list into hundreds of
-  // gigabytes of traffic. Loading a clip into the editor is a deliberate
-  // commitment to work on that film, so the cost is bounded by how many films
-  // are actually being edited - and it is paid once, because from then on the
-  // probe reports the repaired sibling and this never fires again.
-  const autoRepairTried = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    if (!loaded || !loadedProbe) return
-    if (loadedProbe.audio_timeline_ok || loadedProbe.repaired) return
-    const key = loaded.abs
-    if (autoRepairTried.current.has(key)) return
-    autoRepairTried.current.add(key)
+  // It was automatic on load for one commit, and the reason it is not any more
+  // is that a repair reads and rewrites a whole film: it saturates the box and
+  // the share for a minute or two, which is intolerable when it happens the
+  // instant you open a clip rather than when you decide you want it. Nothing
+  // here needs it either - the export repairs the audio on its own, so the
+  // only thing the copy buys is a preview that plays in this browser. That is
+  // worth a deliberate click and nothing more. The bar under the player makes
+  // the click a short one.
 
+  // An export removes the repaired copy when it is done with it, server-side,
+  // which this tab has no way of noticing on its own - and a <video> left
+  // pointing at a file that is gone fails on the next seek with a network
+  // error rather than anything a person could act on. So whenever a job ends,
+  // re-probe whichever panes are following a repaired copy; `repaired` is
+  // recomputed from the disk on every probe, so it simply comes back empty.
+  //
+  // Any job, not only an export of this clip: narrowing it would mean matching
+  // the job's source against the pane's path, and those are not the same
+  // string - the client sends a library path and the server resolves it to a
+  // real one. A probe on a job ending is a cached read and a stat.
+  const seenFinished = useRef<number | null>(null)
+  useEffect(() => {
+    if (lastFinished === null) return
+    const prev = seenFinished.current
+    seenFinished.current = lastFinished
+    // First reading only establishes the mark; jobs that ended before this tab
+    // was open are not news.
+    if (prev === null || lastFinished <= prev) return
     let cancelled = false
     ;(async () => {
-      const id = await startFixAudio(key, true)
-      if (id) await awaitRepair(id, key, () => cancelled)
+      const panes = [
+        [selectedRef.current, probeRef.current, setProbe],
+        [loadedRef.current, loadedProbeRef.current, setLoadedProbe],
+      ] as const
+      for (const [entry, pane, set] of panes) {
+        if (!entry || !pane?.repaired) continue
+        const p = await fetch(`/api/probe?path=${encodeURIComponent(entry.abs)}`)
+          .then((r) => r.json())
+          .catch(() => null)
+        if (cancelled || !p || p.error) continue
+        set(p)
+      }
     })()
     return () => { cancelled = true }
-  }, [loaded?.abs, loadedProbe])
+  }, [lastFinished])
 
   // Arrow keys jump 5 seconds.
   //
@@ -1156,10 +1192,8 @@ export default function App() {
   // activity panel reports it from here on rather than this button pretending
   // to own a process that outlives the click.
   //
-  // Returns the job id so a caller can wait for it. `auto` only silences the
-  // complaints: a repair that was never asked for should not interrupt with a
-  // toast when it turns out the server is already doing it.
-  const startFixAudio = async (path: string, auto = false): Promise<string | null> => {
+  // Returns the job id so a caller can wait for it.
+  const startFixAudio = async (path: string): Promise<string | null> => {
     try {
       const r = await fetch('/api/repair-audio', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1167,15 +1201,13 @@ export default function App() {
       })
       const j = await r.json().catch(() => ({}) as any)
       if (!r.ok) {
-        if (!auto) say(j.error || j.message || 'Could not start the audio repair')
+        say(j.error || j.message || 'Could not start the audio repair')
         return null
       }
-      say(auto
-        ? 'Audio needs repairing — rebuilding it in the background'
-        : 'Repairing audio — watch Activity; it writes a _fixed copy alongside')
+      say('Repairing audio — watch Activity; it writes a _fixed copy alongside')
       return j.id ?? null
     } catch {
-      if (!auto) say('Could not reach the server')
+      say('Could not reach the server')
       return null
     }
   }
@@ -2009,19 +2041,42 @@ export default function App() {
                 disabled: !selected, onClick: rebuildThumbs },
               { icon: 'wave', label: waveBusy ? 'Reading audio…' : waveAuto ? 'Waveform: on' : 'Waveform: off',
                 disabled: waveBusy, onClick: toggleWaveAuto },
-              // Only when there is damage and nothing has fixed it yet. Loading
-              // the clip into the editor does this on its own; this is for
-              // repairing a file you are only previewing.
-              ...(probe && !probe.audio_timeline_ok && !probe.repaired
-                ? [{ icon: 'wave' as IconName, label: fixBusy ? 'Repairing audio…' : 'Fix audio',
-                     disabled: fixBusy, onClick: runFixAudio }]
-                : []),
+              // Fix audio is deliberately NOT here. It lives on the strip
+              // below, which is visible the moment a damaged file is selected -
+              // behind a menu it was two clicks from a problem already on
+              // screen.
               { icon: 'list', label: showMediaInfo ? 'Hide media info' : 'Show media info',
                 onClick: toggleMediaInfo },
               { icon: 'eject', label: 'Close this video', hint: 'U',
                 disabled: !selected, onClick: closePreview },
             ]} />
           </div>
+
+          {/* The one place the repair is offered, right under the player, the
+              moment the probe says a file needs it - before the browser has
+              even tried to play it and failed.
+
+              It can afford to be always-visible because it is rare: the
+              arithmetic only reports damage for files that actually have holes
+              in the audio timeline, so a healthy library never shows this at
+              all. Amber rather than red - nothing is broken that stops you
+              working, since cutting and exporting read the original and repair
+              the audio on the way out. This is only about the preview. */}
+          {probe && !probe.audio_timeline_ok && !probe.repaired && (
+            <div className="flex flex-wrap items-center gap-2 border-l-2 border-amber-400 bg-amber-500/15 px-3 py-2 text-xs text-amber-100">
+              <span className="flex-1">
+                <b>This clip's audio is damaged</b> — it has {probe.audio_timeline_drift.toFixed(1)}s
+                of gaps, which Chromium on Linux refuses to decode while Windows and phones skip past
+                it. Cuts and exports are unaffected and repair it automatically; this is only to make
+                the preview play here.
+              </span>
+              <button onClick={runFixAudio} disabled={fixBusy || jobBusy}
+                title="Writes a playable copy beside the original. The video is copied, not re-encoded, and the copy is deleted again once you export."
+                className="shrink-0 rounded bg-indigo-500/40 px-2.5 py-1 font-medium text-indigo-50 hover:bg-indigo-500/60 disabled:opacity-40">
+                {fixBusy ? 'Repairing…' : jobBusy ? 'Queue busy' : 'Fix audio'}
+              </button>
+            </div>
+          )}
 
           {probe && showMediaInfo && (
             <MediaInfo
@@ -2045,7 +2100,8 @@ export default function App() {
             // the other standing explanations.
             <div className="border-t border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/55">
               Playing a repaired copy — this clip's audio was damaged. The original is untouched,
-              and cuts and exports still read it.
+              cuts and exports still read it, and the copy is deleted once an export of this clip
+              finishes.
             </div>
           )}
 
