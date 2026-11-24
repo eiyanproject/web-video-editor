@@ -93,10 +93,6 @@ pub struct Settings {
     /// Default export destination.
     #[serde(default)]
     pub output_dir: String,
-    /// Where saved edits (cut lists) live. Put this on the share so the edits
-    /// travel with the media rather than living inside the container.
-    #[serde(default)]
-    pub edits_dir: String,
     /// Save the cut list automatically as it changes.
     #[serde(default = "yes")]
     pub autosave_edits: bool,
@@ -142,7 +138,6 @@ impl Default for Settings {
             default_username: String::new(),
             default_password: String::new(),
             default_domain: String::new(),
-            edits_dir: String::new(),
             autosave_edits: true,
             waveform_auto: false,
             max_parallel_jobs: 1,
@@ -838,7 +833,6 @@ struct SettingsPublic {
     default_domain: String,
     /// Same contract as per-share passwords: presence only, never the value.
     has_default_password: bool,
-    edits_dir: String,
     autosave_edits: bool,
     waveform_auto: bool,
     max_parallel_jobs: usize,
@@ -889,7 +883,6 @@ async fn get_settings(State(st): State<AppState>) -> Json<SettingsPublic> {
         default_username: s.default_username.clone(),
         default_domain: s.default_domain.clone(),
         has_default_password: !s.default_password.is_empty(),
-        edits_dir: s.edits_dir.clone(),
         autosave_edits: s.autosave_edits,
         waveform_auto: s.waveform_auto,
         max_parallel_jobs: s.max_parallel_jobs.max(1),
@@ -916,8 +909,6 @@ struct SettingsUpdate {
     /// Explicitly forget the stored default password.
     #[serde(default)]
     clear_default_password: Option<bool>,
-    #[serde(default)]
-    edits_dir: Option<String>,
     #[serde(default)]
     autosave_edits: Option<bool>,
     #[serde(default)]
@@ -977,7 +968,6 @@ async fn put_settings(
         if u.clear_default_password.unwrap_or(false) {
             s.default_password.clear();
         }
-        if let Some(v) = u.edits_dir { s.edits_dir = v; }
         if let Some(v) = u.autosave_edits { s.autosave_edits = v; }
         if let Some(v) = u.waveform_auto { s.waveform_auto = v; }
         // Clamped here as well as in the UI: a 0 posted by anything else would
@@ -1121,13 +1111,6 @@ fn spawn_initial_mount(st: AppState) {
                 let _ = attempt_mount(&st, &c).await;
             }
         }
-
-        // After the mount attempt, not before: the cut lists being imported sit
-        // on the share, so running this first would read an empty directory and
-        // mark a one-time job done having moved nothing. Still inside the
-        // background task, so a sleeping NAS delays the import rather than
-        // startup.
-        edit::import_from_files(&st).await;
     });
 }
 

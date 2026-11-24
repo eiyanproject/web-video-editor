@@ -127,9 +127,17 @@ locking is not honoured reliably over SMB/CIFS and a database opened over a shar
 corrupted by two writes landing together. `rusqlite`'s bundled feature compiles SQLite into
 the binary, so the runtime image needs no package and a backup is one file copy.
 
-On first start after the upgrade, every `.wve.json` in the configured folder is imported
-once — newest wins where several share a title — and **the original files are left
-untouched** as a fallback. The Settings field now means "where to import from", and says so.
+That migration imported the old files once, at first start, newest winning where several
+shared a title, and **left every original file untouched**. The import and the Settings
+field naming the folder to read were both removed on 2026-11-25, once the result had been
+checked against the files: **nothing on the share is read or written for cut lists any
+more**, and there is no import interface because there is no longer anything to import
+from.
+
+⚠ The consequence for anyone upgrading from a `.wve.json` install: that import only
+exists in the 2026-11-24 release. Run it once before moving past that commit, or copy an
+`edits.db` in instead. The old files were never modified, so neither route loses
+anything.
 
 ---
 

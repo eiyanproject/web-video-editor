@@ -16,6 +16,11 @@
 //! The cost of that, named rather than hidden: cut lists **no longer travel
 //! with the library**. They used to sit beside the films, so moving the media
 //! to another machine moved the cuts with it. Now they move with `config/`.
+//!
+//! The one-time import from those per-file cut lists lived here until
+//! 2026-11-25; it had run, and the folder it read is no longer referenced by
+//! anything. Restoring this database means copying the file back, not
+//! re-reading the share.
 
 use std::{
     path::{Path, PathBuf},
@@ -76,6 +81,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                  saved_at     INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS edits_saved_at ON edits (saved_at DESC);
+             -- Key/value side table. Nothing reads it any more: it held the
+             -- marker recording the one-time import of per-file cut lists,
+             -- removed 2026-11-25 once that import had run. Kept as the
+             -- record it is, and because dropping it would mean a migration
+             -- that buys nothing.
              CREATE TABLE IF NOT EXISTS meta (
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
@@ -125,36 +135,5 @@ impl Db {
         })
         .await
         .map_err(|e| ApiError::Internal(format!("saved-edit store task failed: {e}")))?
-    }
-
-    /// Reads a one-off marker. Used by the import, which must happen once and
-    /// not again - "is the table empty?" would re-run it for anyone who
-    /// deliberately deleted every cut list.
-    pub async fn meta_get(&self, key: &str) -> Option<String> {
-        let key = key.to_string();
-        self.call(move |c| {
-            c.query_row("SELECT value FROM meta WHERE key = ?1", [&key], |r| r.get(0))
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
-    pub async fn meta_set(&self, key: &str, value: &str) -> Result<(), ApiError> {
-        let (key, value) = (key.to_string(), value.to_string());
-        self.call(move |c| {
-            c.execute(
-                "INSERT INTO meta (key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [&key, &value],
-            )
-            .map(|_| ())
-        })
-        .await
     }
 }

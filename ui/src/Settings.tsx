@@ -24,7 +24,6 @@ type SettingsData = {
   smb: SmbPublic[]
   allow_any_path: boolean
   output_dir: string
-  edits_dir: string
   autosave_edits: boolean
   max_parallel_jobs: number
   max_parallel_analysis: number
@@ -77,7 +76,6 @@ export default function Settings({
   const [busy, setBusy] = useState<string | null>(null)
   type PathCheck = { exists: boolean; is_dir: boolean; writable: boolean; on_mount: boolean; message: string }
   const [pathCheck, setPathCheck] = useState<PathCheck | null>(null)
-  const [editsDir, setEditsDir] = useState('')
   const [autosaveEdits, setAutosaveEdits] = useState(true)
   const [maxJobs, setMaxJobs] = useState(1)
   const [maxScans, setMaxScans] = useState(1)
@@ -101,22 +99,10 @@ export default function Settings({
       setLogs(d.entries ?? [])
     } catch { /* the panel just stays as it was */ }
   }
-  const [editsCheck, setEditsCheck] = useState<PathCheck | null>(null)
-  const [picking, setPicking] = useState<null | 'edits' | 'output'>(null)
+  const [picking, setPicking] = useState<null | 'output'>(null)
   const [savedEdits, setSavedEdits] = useState<
     { source: string; name: string; segments: number; kept: number; saved_at: number; exists: boolean }[]
   >([])
-
-  const checkEdits = async () => {
-    setBusy('checkEdits')
-    try {
-      const r = await fetch('/api/check-path', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: editsDir }),
-      })
-      setEditsCheck(await r.json())
-    } finally { setBusy(null) }
-  }
 
   // Existence is not enough: a read-only share looks like a perfectly good
   // folder right up until the export fails on the last step.
@@ -137,7 +123,6 @@ export default function Settings({
     setRoots(d.roots)
     setAllowAny(d.allow_any_path)
     setOutputDir(d.output_dir)
-    setEditsDir(d.edits_dir ?? '')
     setAutosaveEdits(d.autosave_edits ?? true)
     setMaxJobs(d.max_parallel_jobs ?? 1)
     setMaxScans(d.max_parallel_analysis ?? 1)
@@ -178,7 +163,6 @@ export default function Settings({
         smb: shares.map(({ has_password, mounted, ...s }) => s),
         allow_any_path: allowAny,
         output_dir: outputDir,
-        edits_dir: editsDir,
         autosave_edits: autosaveEdits,
         max_parallel_jobs: maxJobs,
         max_parallel_analysis: maxScans,
@@ -540,33 +524,9 @@ export default function Settings({
           Your cut lists live in a small database beside this app's settings
           (<code className="text-white/60">config/edits.db</code>), which survives rebuilds and
           updates and is backed up by copying one file. Reopening a clip loads its cuts back
-          automatically.
+          automatically. <b className="text-white/60">Nothing is written to the share</b> —
+          there is no folder to configure.
         </p>
-        <p className="mb-2 text-xs text-white/40">
-          The folder below is only <b className="text-white/60">read once</b>, at startup, to
-          import cut lists that older versions saved as <code>.wve.json</code> files beside the
-          media. Nothing in it is changed or deleted — clear it out yourself once you are
-          satisfied the import worked. Leave it empty if there is nothing to import.
-        </p>
-        <div className="flex gap-2">
-          <button onClick={() => setPicking('edits')} title="Browse for a folder"
-            className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20">📂 Browse</button>
-          <input className={field} value={editsDir} placeholder="/mnt/smb/nas/.video-edits"
-            onChange={(e) => { setEditsDir(cleanPath(e.target.value)); setEditsCheck(null) }} />
-          <button onClick={checkEdits} disabled={!editsDir.trim() || busy === 'checkEdits'}
-            className="shrink-0 rounded bg-white/10 px-3 py-1 text-xs hover:bg-white/20 disabled:opacity-40">
-            {busy === 'checkEdits' ? 'Checking…' : 'Check'}
-          </button>
-        </div>
-        {editsCheck && (
-          <div className={`mt-2 rounded px-3 py-2 text-xs ${
-            editsCheck.writable && editsCheck.on_mount ? 'bg-emerald-500/20 text-emerald-100'
-              : editsCheck.writable ? 'bg-amber-500/20 text-amber-100'
-              : 'bg-red-500/20 text-red-100'
-          }`}>
-            {editsCheck.message}
-          </div>
-        )}
         <label className="mt-2 flex items-center gap-2 text-sm text-white/70">
           <input type="checkbox" checked={autosaveEdits} onChange={(e) => setAutosaveEdits(e.target.checked)} />
           Save cuts automatically as I edit
@@ -796,14 +756,10 @@ export default function Settings({
 
       {picking && (
         <FolderPicker
-          title={picking === 'edits' ? 'Choose the folder for saved edits' : 'Choose the export folder'}
-          initial={picking === 'edits' ? editsDir : outputDir}
+          title="Choose the export folder"
+          initial={outputDir}
           onClose={() => setPicking(null)}
-          onPick={(p) => {
-            if (picking === 'edits') { setEditsDir(p); setEditsCheck(null) }
-            else { setOutputDir(p); setPathCheck(null) }
-            setPicking(null)
-          }}
+          onPick={(p) => { setOutputDir(p); setPathCheck(null); setPicking(null) }}
         />
       )}
 
