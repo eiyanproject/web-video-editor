@@ -50,8 +50,8 @@ The phone UI is a **separate front end on its own port** (8081 by default), not 
 responsive mode of the desktop one. Point a phone at `http://<server>:8081` — or open
 the desktop UI on a phone and take the banner it offers. Single column, player above
 editor, files one tap away, drag-to-scrub, and alarm-clock timecode wheels so the OS
-keyboard never covers the video. Both front ends read and write the same cut lists on
-the share, so an edit started on the desktop continues on the phone.
+keyboard never covers the video. Both front ends read and write the same cut lists, so an
+edit started on the desktop continues on the phone.
 
 ## What it does
 
@@ -63,7 +63,7 @@ the share, so an edit started on the desktop continues on the phone.
 - **Three export shapes**: one joined file, one file per segment, or "safe join" - which
   writes complete files and joins those, for when a single-pass join comes out wrong.
 - **Container remux** (MP4 ↔ MKV ↔ TS ↔ MOV), including in bulk from the Batch tab.
-- **Saved cut lists** on the share, one small file per clip, restored automatically.
+- **Saved cut lists** in a small SQLite database beside the settings, restored automatically.
 - **Aspect ratio is preserved everywhere**, including non-square pixels and portrait
   phone footage - in both players, in thumbnails, and through a rebuilt fragment.
 - **The whole flow works from the keyboard.** Press `?` in the app.

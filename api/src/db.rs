@@ -1,0 +1,160 @@
+//! The saved-edit store: one SQLite file beside `settings.json`.
+//!
+//! SQLite rather than anything with a server, because the only thing stored
+//! here is cut lists - a few kilobytes each, written by one person, read back
+//! by title. A service would mean a port, credentials, a memory footprint and
+//! another thing to start in the LXC, in exchange for nothing this workload
+//! asks for. `rusqlite`'s bundled feature compiles SQLite into the binary, so
+//! the runtime image needs no package at all and a backup is one file copy.
+//!
+//! ⚠ **The file must live on local disk, never on the share.** SQLite takes
+//! locks the way POSIX expects, and SMB/CIFS does not honour them reliably; a
+//! database opened over a share can be corrupted by nothing more dramatic than
+//! two writes landing together. `config/` is already a host bind mount, which
+//! gives the same survive-a-rebuild property the old files had on the share.
+//!
+//! The cost of that, named rather than hidden: cut lists **no longer travel
+//! with the library**. They used to sit beside the films, so moving the media
+//! to another machine moved the cuts with it. Now they move with `config/`.
+
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+use rusqlite::Connection;
+
+use crate::ApiError;
+
+/// Bumped when the schema changes; `migrate` applies everything above the
+/// file's current `user_version`. Stored in the database itself rather than in
+/// a table, which is what `user_version` is for.
+const SCHEMA_VERSION: i64 = 1;
+
+#[derive(Clone)]
+pub struct Db(Arc<Mutex<Connection>>);
+
+/// Beside `settings.json`, for the same reason the log file is: that directory
+/// is the one already bind-mounted to survive a rebuild.
+pub fn db_path(config_path: &Path) -> PathBuf {
+    std::env::var("VEDITOR_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("edits.db")
+        })
+}
+
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let have: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if have >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    if have < 1 {
+        conn.execute_batch(
+            // Keyed by TITLE, exactly as the files were. That is a deliberate
+            // behaviour, not an artefact of how they were stored: the same film
+            // turns up at more than one path, and cuts you can only load from
+            // the path they were saved at are cuts you cannot find when you
+            // need them. A primary key on it also makes a save a plain upsert,
+            // which is what removes the old scheme's "twin file" problem
+            // outright rather than cleaning up after it.
+            //
+            // Segments are one JSON array rather than a child table. They are
+            // always read and written whole, nothing queries inside them, and a
+            // row per segment would buy ordering bugs and nothing else.
+            "CREATE TABLE IF NOT EXISTS edits (
+                 title        TEXT    PRIMARY KEY,
+                 source       TEXT    NOT NULL,
+                 source_size  INTEGER NOT NULL DEFAULT 0,
+                 source_mtime INTEGER NOT NULL DEFAULT 0,
+                 duration     REAL    NOT NULL DEFAULT 0,
+                 fps          REAL    NOT NULL DEFAULT 0,
+                 segments     TEXT    NOT NULL,
+                 saved_at     INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX IF NOT EXISTS edits_saved_at ON edits (saved_at DESC);
+             CREATE TABLE IF NOT EXISTS meta (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
+        )?;
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+impl Db {
+    pub fn open(path: &Path) -> rusqlite::Result<Db> {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let conn = Connection::open(path)?;
+        // WAL so a read never blocks behind the autosave's write, and NORMAL
+        // because losing the last few milliseconds of an autosave to a power
+        // cut is not worth an fsync on every keystroke. busy_timeout covers the
+        // one case a single process can still contend with itself: a blocking
+        // task mid-write while another starts.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        migrate(&conn)?;
+        Ok(Db(Arc::new(Mutex::new(conn))))
+    }
+
+    /// Runs one piece of database work off the async runtime.
+    ///
+    /// `rusqlite` is synchronous, and these queries are small enough that
+    /// blocking inline would usually be harmless - but "usually" is how an
+    /// executor ends up stalled behind a `.part` file on a sleeping NAS. The
+    /// lock is taken inside the blocking closure, so it is never held across an
+    /// await point.
+    pub async fn call<T, F>(&self, f: F) -> Result<T, ApiError>
+    where
+        F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = conn
+                .lock()
+                .map_err(|_| ApiError::Internal("the saved-edit store is poisoned".into()))?;
+            f(&guard).map_err(|e| ApiError::Internal(format!("saved-edit store: {e}")))
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("saved-edit store task failed: {e}")))?
+    }
+
+    /// Reads a one-off marker. Used by the import, which must happen once and
+    /// not again - "is the table empty?" would re-run it for anyone who
+    /// deliberately deleted every cut list.
+    pub async fn meta_get(&self, key: &str) -> Option<String> {
+        let key = key.to_string();
+        self.call(move |c| {
+            c.query_row("SELECT value FROM meta WHERE key = ?1", [&key], |r| r.get(0))
+                .map(Some)
+                .or_else(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(other),
+                })
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    pub async fn meta_set(&self, key: &str, value: &str) -> Result<(), ApiError> {
+        let (key, value) = (key.to_string(), value.to_string());
+        self.call(move |c| {
+            c.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [&key, &value],
+            )
+            .map(|_| ())
+        })
+        .await
+    }
+}

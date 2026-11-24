@@ -537,10 +537,16 @@ export default function Settings({
       <section className="mb-8">
         <h2 className="mb-2 font-medium">Saved edits</h2>
         <p className="mb-2 text-xs text-white/40">
-          Your cut lists are written here, one small JSON file per clip. Put this folder
-          <b className="text-white/60"> on the share</b> rather than inside the container:
-          the cuts then live with the media, survive a rebuild, and travel with the library
-          if it ever moves. Reopening a clip loads its cuts back automatically.
+          Your cut lists live in a small database beside this app's settings
+          (<code className="text-white/60">config/edits.db</code>), which survives rebuilds and
+          updates and is backed up by copying one file. Reopening a clip loads its cuts back
+          automatically.
+        </p>
+        <p className="mb-2 text-xs text-white/40">
+          The folder below is only <b className="text-white/60">read once</b>, at startup, to
+          import cut lists that older versions saved as <code>.wve.json</code> files beside the
+          media. Nothing in it is changed or deleted — clear it out yourself once you are
+          satisfied the import worked. Leave it empty if there is nothing to import.
         </p>
         <div className="flex gap-2">
           <button onClick={() => setPicking('edits')} title="Browse for a folder"

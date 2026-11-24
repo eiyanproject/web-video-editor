@@ -9,6 +9,7 @@
 //! path handling that remains exists to stop malformed input breaking things,
 //! not to police where you go.
 
+mod db;
 mod edit;
 mod export;
 mod media;
@@ -441,6 +442,8 @@ pub struct AppState {
     /// a duplicate ffmpeg over the same (often network-backed) file.
     pub sprite_jobs: Arc<RwLock<std::collections::HashSet<PathBuf>>>,
     pub jobs: export::Jobs,
+    /// Saved cut lists. One SQLite file beside settings.json - see `db.rs`.
+    pub db: db::Db,
     /// Repaired `_fixed` previews THIS process wrote, so an export can delete
     /// the one it was playing through and nothing else. A file the user named
     /// `holiday_fixed.mp4` themselves matches the same convention, and guessing
@@ -1110,13 +1113,21 @@ fn spawn_initial_mount(st: AppState) {
                 .collect::<Vec<_>>()
         };
         if shares.is_empty() {
-            return;
+            tracing::info!("no shares marked auto-mount");
+        } else {
+            tracing::info!("connecting {} share(s) marked auto-mount", shares.len());
+            for c in shares {
+                // Outcome is recorded in the status map; a failure here is not fatal.
+                let _ = attempt_mount(&st, &c).await;
+            }
         }
-        tracing::info!("connecting {} share(s) marked auto-mount", shares.len());
-        for c in shares {
-            // Outcome is recorded in the status map; a failure here is not fatal.
-            let _ = attempt_mount(&st, &c).await;
-        }
+
+        // After the mount attempt, not before: the cut lists being imported sit
+        // on the share, so running this first would read an empty directory and
+        // mark a one-time job done having moved nothing. Still inside the
+        // background task, so a sleeping NAS delays the import rather than
+        // startup.
+        edit::import_from_files(&st).await;
     });
 }
 
@@ -1650,6 +1661,21 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(name = %r.name, path = %r.path, writable = r.writable, %state, "root");
     }
 
+    // Cut lists. Opened before the router exists, because an app that cannot
+    // store an edit should fail at startup with the reason rather than at the
+    // first autosave, an hour into someone's work.
+    let db_file = db::db_path(&config_path);
+    let database = match db::Db::open(&db_file) {
+        Ok(d) => {
+            tracing::info!("saved edits in {}", db_file.display());
+            d
+        }
+        Err(e) => {
+            tracing::error!("cannot open the saved-edit database {}: {e}", db_file.display());
+            std::process::exit(1);
+        }
+    };
+
     let state = AppState {
         settings: Arc::new(RwLock::new(settings)),
         config_path,
@@ -1657,6 +1683,7 @@ async fn main() -> anyhow::Result<()> {
         status: Arc::new(RwLock::new(std::collections::HashMap::new())),
         sprite_jobs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         jobs: export::Jobs::default(),
+        db: database,
         repairs: Arc::new(RwLock::new(std::collections::HashSet::new())),
         limits: Limits::default(),
         metrics: obs::Metrics::default(),

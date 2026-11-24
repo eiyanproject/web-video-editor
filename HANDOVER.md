@@ -25,7 +25,7 @@ back to the share.
 | Analysis | ffprobe cache, keyframe index, sprite thumbnails, audio waveform |
 | Cutting | canvas timeline, frame stepping, typed timecode, undo/redo |
 | Export | frame-exact or keyframe-snap; single / separate / safe join; container remux |
-| Saved cut lists | one small JSON per clip, kept on the share |
+| Saved cut lists | one SQLite database beside the settings, keyed by title |
 | Batch remux | whole-file container conversion with poster thumbnails |
 | Keyboard | the entire flow; press `?` or `F1` in the app |
 | Phone UI | a separate front end on its own port — §6 |
@@ -89,6 +89,7 @@ api/          Rust + Axum
   main.rs     settings, SMB mounting, browse/resolve/stream, logs, path handling
   media.rs    probe, keyframe index, sprites, poster, waveform  (all cached)
   edit.rs     saved cut lists
+  db.rs       the SQLite store they live in
   export.rs   the export engine, including smart-cut
 ui/           React 19 + Vite + Tailwind — TWO front ends, one bundle
   index.html  → src/main.tsx → App.tsx          the desktop editor
@@ -113,11 +114,22 @@ on purpose — see §6.
 |---|---|---|
 | Settings, SMB credentials | `./config/settings.json` (0600) | yes |
 | Analysis cache | `./cache/<hash>/` | yes, and regenerable |
-| Saved cut lists | wherever you point them, usually the share | yes |
+| Saved cut lists | `./config/edits.db` (SQLite) | yes |
 | Exports | wherever you point them | yes |
 
 Cache keys are `path + size + mtime`, so a changed file is re-analysed automatically and
 an unchanged one never is.
+
+**Cut lists moved from files on the share into SQLite** (2026-11-24). They used to be one
+`<title>.wve.json` per clip beside the media, which meant they travelled with the library;
+they now travel with `config/` instead. ⚠ The database must stay on local disk — SQLite's
+locking is not honoured reliably over SMB/CIFS and a database opened over a share can be
+corrupted by two writes landing together. `rusqlite`'s bundled feature compiles SQLite into
+the binary, so the runtime image needs no package and a backup is one file copy.
+
+On first start after the upgrade, every `.wve.json` in the configured folder is imported
+once — newest wins where several share a title — and **the original files are left
+untouched** as a fallback. The Settings field now means "where to import from", and says so.
 
 ---
 
