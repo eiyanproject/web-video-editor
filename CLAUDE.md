@@ -4,6 +4,46 @@ Rust + Axum API, React 19 + Vite UI. Two front ends from one bundle: the desktop
 editor and a separate touch editor on its own port. `HANDOVER.md` is the context
 doc — read it before changing the export engine.
 
+## Documentation is part of "done"
+
+**A change is not finished until the documents it made wrong are fixed in the
+same pass.** Not a follow-up, not a separate commit — the same pass. There are
+three, with different jobs:
+
+| | |
+|---|---|
+| `HANDOVER.md` | what exists and why. **Authoritative** — when any other document disagrees with it, the other one is the bug |
+| `README.md` | the public pitch. Only when user-visible behaviour changes |
+| the Obsidian vault | `C:\Users\USERR\Documents\AI Things\Web Video Editor\` — 25 flat notes, one per concern, carrying the reasoning in more depth than HANDOVER has room for |
+
+`PLAN.md` is a record of original intent and is **never** edited. When the code
+contradicts it, that goes in the vault's `Plan versus reality` note.
+
+### The vault drifts silently
+
+Nothing in this repo references it, so nothing will remind you, and the notes
+state mechanisms confidently enough that a stale one reads as true. Before
+calling a change done, grep the vault for whatever you just made false:
+
+```bash
+grep -rin 'on the share' "/c/Users/USERR/Documents/AI Things/Web Video Editor"
+```
+
+Three failure modes, in the order they actually happen:
+
+1. **Stale line counts.** `Architecture.md` and `UI structure.md` tabulate every
+   source file with a line count. If you touched one, `wc -l` it and fix the
+   figure — including the index's own total. Never write an approximation when
+   an exact count is one command away.
+2. **Stale claims in notes you did not think were related.** Moving saved cut
+   lists into SQLite falsified a sentence in `UI structure.md`, four notes away
+   from the change.
+3. **Orphans.** The vault is flat, `Web Video Editor.md` is the index, and every
+   note links back to it. A note the index does not link is invisible.
+
+`Personal notes.md` is the user's own scratch space. Read it; never edit it
+unless asked.
+
 ## Observability
 
 Every HTTP service in this repo exposes:

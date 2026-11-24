@@ -412,6 +412,14 @@ The dev and production stacks carry **explicit, different compose project names*
 Without that they derive the same name from the folder, and starting one adopts and
 recreates the other's containers.
 
+**There is a fourth document, and it is not in this repository.** An Obsidian vault at
+`C:\Users\USERR\Documents\AI Things\Web Video Editor\` holds 25 notes — one per concern
+— explaining the reasoning behind the awkward parts in more depth than this document has
+room for. It is part of the deliverable, not a side note: **updating it is part of
+finishing a change**, in the same pass, and `CLAUDE.md` says how to check it. Because
+nothing in the code points at it, it goes stale without anyone noticing. When it
+disagrees with this document, this document wins.
+
 **A note on how this was built, because it matters for whatever comes next.** Every
 non-obvious behaviour in section 4 was found by measuring output, not by reasoning about
 it — and in several cases the measurement contradicted a plan that looked sound. The
