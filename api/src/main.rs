@@ -792,10 +792,16 @@ async fn stream(
     if !file.is_file() {
         return Err(ApiError::NotFound);
     }
-    let res = ServeFile::new(file)
-        .oneshot(req)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // `ServeFile`'s service error type is `Infallible`: a missing or unreadable
+    // file comes back as a 404 or 500 *response*, never as an `Err`. So there is
+    // no error to map, and pretending otherwise is what the compiler was warning
+    // about - `e.to_string()` was unreachable code. Matching the error with no
+    // arms is how "this value cannot exist" is said in the type system, and it
+    // costs no panic path.
+    let res = match ServeFile::new(file).oneshot(req).await {
+        Ok(res) => res,
+        Err(e) => match e {},
+    };
     Ok(res.map(Body::new))
 }
 
