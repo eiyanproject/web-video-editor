@@ -100,9 +100,6 @@ export default function Settings({
     } catch { /* the panel just stays as it was */ }
   }
   const [picking, setPicking] = useState<null | 'output'>(null)
-  const [savedEdits, setSavedEdits] = useState<
-    { source: string; name: string; segments: number; kept: number; saved_at: number; exists: boolean }[]
-  >([])
 
   // Existence is not enough: a read-only share looks like a perfectly good
   // folder right up until the export fails on the last step.
@@ -128,7 +125,6 @@ export default function Settings({
     setMaxScans(d.max_parallel_analysis ?? 1)
     loadLogs()
     loadTelem()
-    fetch('/api/edits').then((r) => r.json()).then(setSavedEdits).catch(() => {})
     setDefUser(d.default_username)
     setDefDomain(d.default_domain)
     setHasDefPass(d.has_default_password)
@@ -527,6 +523,11 @@ export default function Settings({
           automatically. <b className="text-white/60">Nothing is written to the share</b> —
           there is no folder to configure.
         </p>
+        <p className="mb-2 text-xs text-white/40">
+          The <b className="text-white/60">Saved cuts</b> tab lists every one of them: search, open a
+          clip straight into the editor, export to JSON, import a file back, download the database as
+          a backup, or clear out the cut lists whose film is gone.
+        </p>
         <label className="mt-2 flex items-center gap-2 text-sm text-white/70">
           <input type="checkbox" checked={autosaveEdits} onChange={(e) => setAutosaveEdits(e.target.checked)} />
           Save cuts automatically as I edit
@@ -673,26 +674,6 @@ export default function Settings({
             )}
           </div>
         </div>
-        {!!savedEdits.length && (
-          <div className="mt-3 rounded border border-white/10">
-            <div className="border-b border-white/10 px-2 py-1 text-xs text-white/50">
-              {savedEdits.length} saved {savedEdits.length === 1 ? 'edit' : 'edits'}
-            </div>
-            <div className="max-h-40 overflow-y-auto">
-              {savedEdits.map((e) => (
-                <div key={e.source} className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-white/5">
-                  <span className={e.exists ? 'text-emerald-400/70' : 'text-red-400/70'}
-                    title={e.exists ? 'source present' : 'source file is missing'}>●</span>
-                  <span className="min-w-0 flex-1 truncate text-white/70">{e.name}</span>
-                  <span className="shrink-0 text-white/35">{e.kept}/{e.segments} kept</span>
-                  <span className="shrink-0 text-white/25">
-                    {e.saved_at ? new Date(e.saved_at * 1000).toLocaleDateString() : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </section>
 
       <section className="mb-8">

@@ -1743,6 +1743,13 @@ async fn main() -> anyhow::Result<()> {
         // ---- Phase 3: saved edits and export ----
         .route("/api/edit", get(edit::load_edit).post(edit::save_edit).delete(edit::delete_edit))
         .route("/api/edits", get(edit::list_edits))
+        // Bulk work on cut lists, all POST: a DELETE carrying a body is the one
+        // shape a reverse proxy is liable to strip on the way through, and this
+        // app is explicitly meant to sit behind one.
+        .route("/api/edits/export", post(edit::export_edits))
+        .route("/api/edits/import", post(edit::import_edits))
+        .route("/api/edits/delete", post(edit::delete_edits))
+        .route("/api/edits/db", get(edit::download_db))
         .route("/api/export", post(export::start_export))
         .route("/api/repair-audio", post(export::start_repair))
         .route("/api/jobs", get(export::list_jobs))

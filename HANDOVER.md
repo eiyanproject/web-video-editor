@@ -26,6 +26,7 @@ back to the share.
 | Cutting | canvas timeline, frame stepping, typed timecode, undo/redo |
 | Export | frame-exact or keyframe-snap; single / separate / safe join; container remux |
 | Saved cut lists | one SQLite database beside the settings, keyed by title |
+| Cut-list library | the *Saved cuts* tab: search, open, JSON export/import, database download, bulk delete |
 | Batch remux | whole-file container conversion with poster thumbnails |
 | Keyboard | the entire flow; press `?` or `F1` in the app |
 | Phone UI | a separate front end on its own port — §6 |
@@ -347,7 +348,8 @@ started on the desktop continues on the phone and back.
 
 ## 7. Planned: subtitles and TTS
 
-A new tab beside *Trim* and *Batch remux*. Three related jobs, in increasing difficulty.
+A new tab beside *Trim*, *Saved cuts* and *Batch remux*. Three related jobs, in
+increasing difficulty.
 
 ### 7a. Subtitle editing and muxing
 

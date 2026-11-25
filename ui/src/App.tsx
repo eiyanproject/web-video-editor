@@ -11,6 +11,7 @@ import Timeline from './Timeline'
 import SegmentList from './SegmentList'
 import ExportPanel from './ExportPanel'
 import Batch from './Batch'
+import SavedCuts from './SavedCuts'
 import { useSegments, splitAt, toggleKeep, mergeAt, moveBoundary, snapToKeyframe, normalise, cutCost } from './segments'
 import {
   type Entry, fmtSize, fmtDate, parseTimecode, fmtTimecode, displayAspect, PHONE_PORT,
@@ -251,7 +252,7 @@ type Session = {
 }
 
 export default function App() {
-  const [page, setPage] = useState<'edit' | 'settings' | 'logs' | 'batch'>('edit')
+  const [page, setPage] = useState<'edit' | 'settings' | 'logs' | 'batch' | 'cuts'>('edit')
   const [wantShare, setWantShare] = useState(false)
   const [cwd, setCwd] = useState('')
   const [parent, setParent] = useState<string | null>(null)
@@ -1439,6 +1440,34 @@ export default function App() {
     }
   }
 
+  /// Open one film straight into the editor, from its path.
+  ///
+  /// Used by the Saved cuts tab, which knows a path and nothing else. It goes
+  /// through `/api/resolve` rather than trusting the stored string, because a
+  /// row can name a file this server can no longer see - an imported cut list,
+  /// or a share that is offline - and the editor must refuse that with a reason
+  /// rather than load a clip that will not play. The explorer is moved to the
+  /// containing folder too, so the rest of that folder is one click away.
+  const openFromPath = async (p: string) => {
+    setPage('edit')
+    setError(null)
+    try {
+      const r = await fetch(`/api/resolve?path=${encodeURIComponent(p)}`)
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error)
+      if (d.parent) await openDir(d.parent)
+      const entry: Entry = {
+        name: d.name, abs: d.abs, is_dir: false, size: 0, mtime: 0, is_video: d.is_video,
+      }
+      setSelected(entry)
+      setLoaded(entry)
+      setPlayError(null)
+      say(`Loaded ${d.name}`)
+    } catch (e: any) {
+      setError(`Could not open that clip: ${e.message ?? e}`)
+    }
+  }
+
   const copy = async (text: string, what: string) => {
     try { await navigator.clipboard.writeText(text); say(`${what} copied`) }
     catch { say('Clipboard blocked by the browser') }
@@ -1514,6 +1543,8 @@ export default function App() {
 
   if (page === 'logs') return <Logs onClose={() => setPage('edit')} />
   if (page === 'batch') return <Batch onClose={() => setPage('edit')} />
+  if (page === 'cuts')
+    return <SavedCuts onClose={() => setPage('edit')} onOpen={openFromPath} />
   if (page === 'settings')
     return <Settings startWithShare={wantShare}
       onClose={() => { setWantShare(false); setPage('edit'); loadRoots(); openDir('') }} />
@@ -1655,6 +1686,11 @@ export default function App() {
               title="Convert whole files between containers, in bulk"
               className="rounded px-3 py-1 text-white/50 hover:bg-white/10 hover:text-white">
               Batch remux
+            </button>
+            <button onClick={() => setPage('cuts')}
+              title="Every saved cut list: search, open, export, import, delete"
+              className="rounded px-3 py-1 text-white/50 hover:bg-white/10 hover:text-white">
+              Saved cuts
             </button>
             <div className="flex-1" />
             {/* Settings stays a button because it is the one people reach for

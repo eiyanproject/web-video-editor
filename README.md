@@ -64,6 +64,8 @@ edit started on the desktop continues on the phone.
   writes complete files and joins those, for when a single-pass join comes out wrong.
 - **Container remux** (MP4 ↔ MKV ↔ TS ↔ MOV), including in bulk from the Batch tab.
 - **Saved cut lists** in a small SQLite database beside the settings, restored automatically.
+- **A cut-list library** — search them, reopen one in the editor, export or import JSON,
+  download the database as a backup, clear out the ones whose film is gone.
 - **Aspect ratio is preserved everywhere**, including non-square pixels and portrait
   phone footage - in both players, in thumbnails, and through a rebuilt fragment.
 - **The whole flow works from the keyboard.** Press `?` in the app.

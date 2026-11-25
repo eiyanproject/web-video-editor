@@ -37,7 +37,12 @@ use crate::ApiError;
 const SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone)]
-pub struct Db(Arc<Mutex<Connection>>);
+pub struct Db {
+    conn: Arc<Mutex<Connection>>,
+    /// Kept so a snapshot can be written beside the live file - the same
+    /// directory, so the rename-free copy never crosses a filesystem.
+    path: PathBuf,
+}
 
 /// Beside `settings.json`, for the same reason the log file is: that directory
 /// is the one already bind-mounted to survive a rebuild.
@@ -111,7 +116,10 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         migrate(&conn)?;
-        Ok(Db(Arc::new(Mutex::new(conn))))
+        Ok(Db {
+            conn: Arc::new(Mutex::new(conn)),
+            path: path.to_path_buf(),
+        })
     }
 
     /// Runs one piece of database work off the async runtime.
@@ -126,7 +134,7 @@ impl Db {
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let conn = self.0.clone();
+        let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let guard = conn
                 .lock()
@@ -135,5 +143,41 @@ impl Db {
         })
         .await
         .map_err(|e| ApiError::Internal(format!("saved-edit store task failed: {e}")))?
+    }
+
+    /// A consistent copy of the whole database, as bytes.
+    ///
+    /// `VACUUM INTO` rather than reading `edits.db` off disk, because in WAL
+    /// mode the live file is only half the story - the recent writes are in
+    /// `edits.db-wal`, so a plain file copy can hand back a database missing
+    /// the last cut list saved. `VACUUM INTO` writes one self-contained,
+    /// already-compacted file from a single read transaction.
+    ///
+    /// The snapshot is written beside the database, read, and deleted. It is
+    /// small - a few hundred KB for hundreds of cut lists - so holding it in
+    /// memory to serve is cheaper than streaming a file that then has to be
+    /// cleaned up if the client disconnects mid-download.
+    pub async fn snapshot(&self) -> Result<Vec<u8>, ApiError> {
+        let tmp = self.path.with_file_name(format!(
+            "{}.snapshot-{}.db",
+            self.path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "edits.db".into()),
+            std::process::id()
+        ));
+        // VACUUM INTO refuses to write over an existing file, so a snapshot
+        // left behind by a killed process would block every later download.
+        let _ = tokio::fs::remove_file(&tmp).await;
+
+        let target = tmp.to_string_lossy().to_string();
+        self.call(move |c| c.execute("VACUUM INTO ?1", [&target]).map(|_| ()))
+            .await?;
+
+        let bytes = tokio::fs::read(&tmp)
+            .await
+            .map_err(|e| ApiError::Internal(format!("snapshot could not be read back: {e}")));
+        let _ = tokio::fs::remove_file(&tmp).await;
+        bytes
     }
 }
