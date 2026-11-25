@@ -14,10 +14,24 @@ three, with different jobs:
 |---|---|
 | `HANDOVER.md` | what exists and why. **Authoritative** — when any other document disagrees with it, the other one is the bug |
 | `README.md` | the public pitch. Only when user-visible behaviour changes |
-| the Obsidian vault | `C:\Users\USERR\Documents\AI Things\Web Video Editor\` — 25 flat notes, one per concern, carrying the reasoning in more depth than HANDOVER has room for |
+| the Obsidian vault | `C:\Users\USERR\Documents\AI Things\Web Video Editor\` — 33 flat notes, one per concern, carrying the reasoning in more depth than HANDOVER has room for **and a code reference** (see below) |
 
 `PLAN.md` is a record of original intent and is **never** edited. When the code
 contradicts it, that goes in the vault's `Plan versus reality` note.
+
+### Orient from the vault's code reference, not from the repo
+
+Eight vault notes describe the code itself — `Repo layout`, `API reference`,
+`Data shapes`, `Backend code map`, `Export engine internals`, `Media analysis
+internals`, `Frontend code map`, `Dev and test recipes` — so a session can work
+**without re-reading the source or re-probing the dev environment**. Start there.
+Each carries a `checked:` date and ends in a *Verify this note* block of commands;
+run the one that covers what you are about to rely on, because **a reference that
+names a function, route, field or default is wrong the moment that thing changes.**
+
+So changing an endpoint, a struct, a setting, a constant, an ffmpeg argument or a
+build step means updating the matching reference note in the same pass, and bumping
+its `checked:` date once you have re-verified it.
 
 ### The vault drifts silently
 

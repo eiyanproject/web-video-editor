@@ -423,9 +423,10 @@ Without that they derive the same name from the folder, and starting one adopts 
 recreates the other's containers.
 
 **There is a fourth document, and it is not in this repository.** An Obsidian vault at
-`C:\Users\USERR\Documents\AI Things\Web Video Editor\` holds 25 notes — one per concern
+`C:\Users\USERR\Documents\AI Things\Web Video Editor\` holds 33 notes — one per concern
 — explaining the reasoning behind the awkward parts in more depth than this document has
-room for. It is part of the deliverable, not a side note: **updating it is part of
+room for, plus eight that describe the code itself (routes, data shapes, function maps,
+build and test recipes) so a session can orient without re-reading the source. It is part of the deliverable, not a side note: **updating it is part of
 finishing a change**, in the same pass, and `CLAUDE.md` says how to check it. Because
 nothing in the code points at it, it goes stale without anyone noticing. When it
 disagrees with this document, this document wins.
