@@ -395,6 +395,34 @@ export default function App() {
   /// Which player the keyboard should drive: whichever was last played,
   /// clicked or seeked.
   const lastPlayerRef = useRef<'editor' | 'preview'>('editor')
+
+  // The keyboard never changes which player it drives, except with Tab.
+  //
+  // A player claims the keys when it is clicked, played or seeked - which is
+  // right for the mouse and wrong for a key, because several keys seek the
+  // EDITOR (T, K, [ ], digits in the timecode box). Pressing T and then Space
+  // played the editor while the viewer was the pane being watched.
+  //
+  // Seek and play events arrive after the keypress and carry nothing about
+  // what caused them, so remember which hand touched the app last. Capture
+  // phase on the window, which sees the press before a video's own controls
+  // can swallow it. Tab is unaffected: it sets the pane directly.
+  const keyboardDriven = useRef(false)
+  useEffect(() => {
+    const key = () => { keyboardDriven.current = true }
+    const pointer = () => { keyboardDriven.current = false }
+    window.addEventListener('keydown', key, true)
+    window.addEventListener('pointerdown', pointer, true)
+    return () => {
+      window.removeEventListener('keydown', key, true)
+      window.removeEventListener('pointerdown', pointer, true)
+    }
+  }, [])
+  const claimPane = (pane: 'editor' | 'preview') => {
+    if (keyboardDriven.current) return
+    lastPlayerRef.current = pane
+    setActivePane(pane)
+  }
   const splitRef = useRef<(() => void) | null>(null)
   const toggleRef = useRef<(() => void) | null>(null)
   const undoRef = useRef<(() => void) | null>(null)
@@ -1784,9 +1812,9 @@ export default function App() {
                           }
                           pendingEditSeek.current = null
                         }}
-                        onPlay={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
-                        onClick={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
-                        onSeeking={() => { lastPlayerRef.current = 'editor'; setActivePane('editor') }}
+                        onPlay={() => claimPane('editor')}
+                        onClick={() => claimPane('editor')}
+                        onSeeking={() => claimPane('editor')}
                         onTimeUpdate={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                         onSeeked={() => setEditTime(editVideoRef.current?.currentTime ?? 0)}
                       />
@@ -2014,9 +2042,9 @@ export default function App() {
             {srcUrl ? (
               <video key={srcUrl} ref={videoRef} src={srcUrl} controls preload="metadata"
                 muted={muted} className="h-full w-full"
-                onPlay={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
-                onClick={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
-                onSeeking={() => { lastPlayerRef.current = 'preview'; setActivePane('preview') }}
+                onPlay={() => claimPane('preview')}
+                onClick={() => claimPane('preview')}
+                onSeeking={() => claimPane('preview')}
                 onLoadedMetadata={() => {
                   setPlayError(null)
                   const v = videoRef.current
