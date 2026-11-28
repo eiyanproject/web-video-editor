@@ -704,8 +704,16 @@ export default function App() {
   // The move their workflow actually turns on: take where the preview is and
   // put the editor there, with the timecode filled in ready to nudge.
   transferTimeRef.current = () => {
-    const t = videoRef.current?.currentTime
-    if (t == null) { say('Nothing playing in the preview'); return }
+    const at = videoRef.current?.currentTime
+    if (at == null) { say('Nothing playing in the preview'); return }
+    // Dropped to the whole second: the milliseconds of wherever the preview
+    // happened to stop were being zeroed by hand almost every time. Both the
+    // box and the playhead get the same value, so "Cut here" and "Cut at
+    // time" cannot disagree. Anything finer is typed after G.
+    //
+    // Via whole milliseconds first, so a position the player reports as
+    // 754.9999999 counts as the 755.000 it is displayed as, not as 754.
+    const t = Math.floor(Math.round(at * 1000) / 1000)
     setTcInput(fmtTimecode(t))
     if (editVideoRef.current) { editVideoRef.current.currentTime = t; setEditTime(t) }
     say(`Editor moved to ${fmtTimecode(t).slice(0, 8)}`)
@@ -1065,7 +1073,12 @@ export default function App() {
 
       // --- carrying a time from the preview into the editor ---
       if (is('t')) { transferTimeRef.current?.(); return }
-      if (is('g')) { focusTimecodeRef.current?.(); return }
+      // Cancelled, unlike the other letters: this one moves focus into a text
+      // field mid-keypress, so the 'g' itself was then typed into the box,
+      // stripped as not part of a time, and the rewrite threw the caret to the
+      // end - every digit after that overwrote the last millisecond instead of
+      // starting on the seconds.
+      if (is('g')) { take(); focusTimecodeRef.current?.(); return }
       if (is('k')) { snapKeyframeRef.current?.(); return }
 
       // --- cutting ---
@@ -1626,7 +1639,7 @@ export default function App() {
                 ['Take it to the editor', [
                   ['L', 'load the selected clip'],
                   ['U', 'unload — empties the active pane'],
-                  ['T', 'move the editor to where the preview is'],
+                  ['T', 'move the editor to where the preview is, to the whole second'],
                   ['G', 'jump into the timecode box'],
                   ['0-9', 'in the box: type digits, HH → MM → SS → ms'],
                   ['↑ ↓', 'in the box: change the digit under the cursor'],
